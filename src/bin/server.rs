@@ -1,3 +1,5 @@
+
+
 use bevy::log::{LogPlugin};
 use bevy::prelude::*;
 use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
@@ -5,6 +7,7 @@ use bevy_renet::renet::{ClientId, ConnectionConfig, DefaultChannel, RenetServer,
 use bevy_renet::transport::NetcodeServerPlugin;
 use bevy_renet::RenetServerPlugin;
 use local_ip_address::local_ip;
+use pathing::*;
 use roguelike::*;
 use std::collections::HashMap;
 use std::{
@@ -15,10 +18,7 @@ use pathfinding::prelude::{astar, bfs};
 
 
 
-#[derive(Debug, Default, Resource)]
-pub struct Map {
-    pub blocked_paths: Vec<Pos>
-}
+
 
 /* 
 impl Pos {
@@ -35,10 +35,9 @@ impl Pos {
              .into_iter().map(|p| (p, 1)).collect()  // Le pone peso de 1 a todo
     }
 }*/
-  
 
 
-const PLAYER_MOVE_SPEED: f32 = 5.0;
+
 
 #[derive(Debug, Default, Resource)]
 pub struct ServerLobby {
@@ -53,13 +52,14 @@ fn main() {
             level: bevy::log::Level::DEBUG,
             ..Default::default()
         }))
+        .add_plugins(PathingPlugin)
        // .add_plugins(MinimalPlugins)
         //.add_plugins(LogPlugin::default())
         .add_systems(
             Startup, (
                 setup_level,
                 setup_simple_camera,
-                setup_prohibited_areas.after(setup_level),
+                // setup_prohibited_areas.after(setup_level),
             )
         )
         .add_plugins(RenetServerPlugin)
@@ -72,16 +72,15 @@ fn main() {
         .add_systems(
             Update, 
             (
-                server_events,
-                server_network_sync,
-                move_players_system,
+                server_events, 
                 update_projectiles_system,                
             )
         )
         .add_systems(
             FixedUpdate, (
-                apply_velocity_system,
+                server_network_sync,                
                 click_move_players_system
+                
             )
         )
         .add_systems(PostUpdate, projectile_on_removal_system)
@@ -163,6 +162,7 @@ fn server_events(
                     })
                     .insert(PlayerInput::default())
                     .insert(Velocity::default())
+                    .insert(CurrentMovementState { position: transform.translation})
                     .insert(Player { id: *client_id })
                     .id();
 
@@ -234,6 +234,7 @@ fn server_events(
         }
         while let Some(message) = server.receive_message(client_id, ClientChannel::Input) {
             let input: PlayerInput = bincode::deserialize(&message).unwrap();
+           
             if let Some(player_entity) = lobby.players.get(&client_id) {
                 commands.entity(*player_entity).insert(input);
             }
@@ -264,15 +265,7 @@ fn server_ping(mut server: ResMut<RenetServer>) {
 
 }
 
-pub fn setup_prohibited_areas(mut map: ResMut<Map>, mut buildings: Query<(Entity, &mut Building)>) {
-   
-    for (_entity, mut building) in buildings.iter_mut() {
-        info!("Building {:?}!", building.blocked_paths);
-        map.blocked_paths.append(&mut building.blocked_paths);
-        info!("blocked_paths {:?}!", map);
-    }
 
-}
 
 pub fn setup_simple_camera(mut commands: Commands) {
     // camera
@@ -282,95 +275,16 @@ pub fn setup_simple_camera(mut commands: Commands) {
     });
 }
 
-fn get_succesors(current_pos: &Pos, mut map: &ResMut<Map>) -> Vec<Pos> {
 
-    let &Pos(x, z) = current_pos;
-
-    let blocked_paths = &map.blocked_paths;
-    //info!("blocked_paths   {:?}!", blocked_paths);
-    let mut possible_positions =  vec![Pos(x+1,z+1), Pos(x+1,z), Pos(x+1,z-1), Pos(x,z+1),
-    Pos(x,z-1), Pos(x-1,z-1), Pos(x-1,z+1), Pos(x-1,z)];
-
-    possible_positions.retain(|pos| !blocked_paths.contains(&pos));
-
-
-    info!("possible_positions   {:?}!", possible_positions);
-    // se le agrega el peso
-    possible_positions
-
-}
-fn  get_astar_successors(current_pos: &Pos, mut map: &ResMut<Map>) -> Vec<(Pos, u32)> {
-
-    let &Pos(x, z) = current_pos;
-
-    let blocked_paths = &map.blocked_paths;
-    //info!("blocked_paths   {:?}!", blocked_paths);
-
-  
-     let mut possible_positions =  vec![];
-
-   // Si no hay nada arriba, puede ir hacia arriba
-    if(!blocked_paths.contains(&Pos(x,z+1))) {
-        possible_positions.push(Pos(x,z+1));
-    }
-    // Si no hay nada derecha, puede ir hacia derecha
-    if(!blocked_paths.contains(&Pos(x+1,z))) {
-        possible_positions.push(Pos(x+1,z));
-    }
-    // Si no hay nada izquierda, puede ir hacia izquierda
-    if(!blocked_paths.contains(&Pos(x-1,z))) {
-        possible_positions.push(Pos(x-1,z));
-    }
-    // Si no hay nada abajo, puede ir hacia abajo
-    if(!blocked_paths.contains(&Pos(x,z-1))) {
-        possible_positions.push(Pos(x,z-1));
-    }
-    // Si tiene nada arriba ni a la izq, diagonal arriba izq.
-    if(!blocked_paths.contains(&Pos(x,z+1)) && !blocked_paths.contains(&Pos(x-1,z)) && !blocked_paths.contains(&Pos(x-1,z+1))) {
-        possible_positions.push(Pos(x-1,z+1));
-    }
-    // Si tiene nada arriba ni a la derecha, diagonal arriba derecha.
-    if(!blocked_paths.contains(&Pos(x,z+1)) && !blocked_paths.contains(&Pos(x+1,z)) && !blocked_paths.contains(&Pos(x+1,z+1))) {
-        possible_positions.push(Pos(x+1,z+1));
-    }
-    // Si tiene nada abajo ni a la izq, diagonal abajo izq.
-    if(!blocked_paths.contains(&Pos(x,z-1)) && !blocked_paths.contains(&Pos(x-1,z)) && !blocked_paths.contains(&Pos(x-1,z-1))) {
-        possible_positions.push(Pos(x-1,z-1));
-    }
-    // Si tiene nada abajo ni a la derecha, diagonal abajo derecha.
-    if(!blocked_paths.contains(&Pos(x,z-1)) && !blocked_paths.contains(&Pos(x+1,z)) && !blocked_paths.contains(&Pos(x+1,z-1))) {
-        possible_positions.push(Pos(x+1,z-1));
-    }
-
-
-    /*let mut possible_positions =  vec![
-        Pos(x+1,z+1), 
-        Pos(x+1,z), 
-        Pos(x+1,z-1), 
-        Pos(x,z+1), 
-        Pos(x,z-1), 
-        Pos(x-1,z-1), 
-        Pos(x-1,z+1), 
-        Pos(x-1,z)
-    ];*/
-
-
-    possible_positions.retain(|pos| !blocked_paths.contains(&pos));
-
-
-    info!("possible_positions   {:?}!", possible_positions);
-
-    possible_positions.into_iter().map(|p| (p, 1)).collect()
-
-}
 
 fn click_move_players_system(
-    mut query: Query<(&mut Velocity, &PlayerCommand, &mut Transform)>,
-    mut map: ResMut<Map>
+    mut commands: Commands,
+    mut query: Query<(&mut Velocity, &PlayerCommand, &mut Transform, Entity)>,
+    map: ResMut<Map>
 ) {
-    for (mut velocity, command, mut transform) in query.iter_mut() {
+    for (mut velocity, command, mut transform, entity) in query.iter_mut() {
         match command {
-            PlayerCommand::Move { mut destination_at } => {  
+            PlayerCommand::Move { destination_at } => {  
 
                 let start: Pos = Pos(
                     transform.translation.x.round() as i32, 
@@ -394,15 +308,6 @@ fn click_move_players_system(
 
 
                     info!("*Star Result {:?}! ",astar_result);    
-                    // let bfs_result = bfs( &start, |p| succesors.clone(), |p| *p == goal);
-                    /*let astar_result = astar(
-                        &start,
-                        |p| p.astar_successors(),
-                        |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
-                        |p| *p==goal);*/
-
-              
-                       // info!("bfs_ Result {:?}! ",bfs_result);    
 
                
                     if let Some(result) = astar_result{
@@ -419,7 +324,14 @@ fn click_move_players_system(
                             let &Pos(x, z) = final_pos;
 
                             //info!("Final Pos: {:?}!", final_pos);    
+                            // Se cambia el punto objetivo.
+                            commands.entity(entity).insert(CurrentMovementState {
+                                position: Vec3 { x: x as f32, y: 2.0, z: z as f32},
+                            });
+
+                            // velocity.0 = calculate_velocity(transform.translation, Vec3 { x: x as f32, y: 2.0, z: z as f32} );
                             
+                            /*info!("calculated_velocity: {:?}!", calculated_velocity);   
                             //info!("*Star Result Next step  x: {:?}! z: {:?}!", x, z);    
                             info!("Translation: {:?}!", transform.translation);   
                             let distance_x = x as f32 - transform.translation.x;
@@ -447,45 +359,10 @@ fn click_move_players_system(
                             }
                             else if  distance_z < 0.0 {
                                 velocity.0.z = -PLAYER_MOVE_SPEED;
-                            } 
-
-                           
+                            }*/                            
                        }
                       
-                    }
-                  
-                    //transform.translation.x = destination_at.x;
-                    //transform.translation.z = destination_at.z;
-             
-                    /* 
-                    let distance_x = destination_at.x - transform.translation.x;
-
-                    if distance_x.abs() < 0.1  {
-                        velocity.0.x = 0.0;
-                        transform.translation.x = destination_at.x;
                     }        
-                    else if distance_x > 0.0 {
-                        velocity.0.x = PLAYER_MOVE_SPEED;
-                    }
-                    else if  distance_x < 0.0 {
-                        velocity.0.x = -PLAYER_MOVE_SPEED;
-                    }
-                 
-
-                    let distance_z = destination_at.z - transform.translation.z;             
-
-                    if  distance_z.abs() < 0.1  {
-                        velocity.0.z = 0.0; 
-                        transform.translation.z = destination_at.z;
-                    }                    
-                    else if distance_z > 0.0 {
-                        velocity.0.z = PLAYER_MOVE_SPEED;
-                    }
-                    else if  distance_z < 0.0 {
-                        velocity.0.z = -PLAYER_MOVE_SPEED;
-                    }*/
-
-                  
                   
                 }
             },
@@ -496,21 +373,7 @@ fn click_move_players_system(
     }
 }
 
-fn move_players_system(mut query: Query<(&mut Velocity, &PlayerInput)>) {
-    for (mut velocity, input) in query.iter_mut() {
-        let x = (input.right as i8 - input.left as i8) as f32;
-        let y = (input.down as i8 - input.up as i8) as f32;
-        let direction = Vec2::new(x, y).normalize_or_zero();
-        velocity.0.x = direction.x * PLAYER_MOVE_SPEED;
-        velocity.0.z = direction.y * PLAYER_MOVE_SPEED;
-    }
-}
 
-fn apply_velocity_system(mut query: Query<(&Velocity, &mut Transform)>, time: Res<Time>) {
-    for (velocity, mut transform) in query.iter_mut() {
-        transform.translation += velocity.0 * time.delta_seconds();
-    }
-}
 
 fn update_projectiles_system(mut commands: Commands, mut projectiles: Query<(Entity, &mut Projectile)>, time: Res<Time>) {
     for (entity, mut projectile) in projectiles.iter_mut() {

@@ -1,13 +1,22 @@
+pub mod pathing;
+
 use bevy::prelude::*;
 use bevy_renet::renet::*;
 use bevy_renet::*;
 use serde::{Deserialize, Serialize};
 use std::{f32::consts::PI, time::Duration};
 
+
+
+pub const PLAYER_MOVE_SPEED: f32 = 5.0;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     Ping,
 }
+
+
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
@@ -28,6 +37,7 @@ pub struct PlayerInput {
     pub down: bool,
     pub left: bool,
     pub right: bool,
+    pub destination_at: Option<Pos>
 }
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -206,7 +216,13 @@ pub fn setup_level(
 
 
 }
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+
+#[derive(Debug, Default, Resource)]
+pub struct Map {
+    pub blocked_paths: Vec<Pos>
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord,  Copy, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Pos(pub i32, pub i32);
 
 #[derive(Debug, Component)]
@@ -243,4 +259,9 @@ pub fn spawn_fireball(
             duration: Timer::from_seconds(1.5, TimerMode::Once),
         })
         .id()
+}
+
+
+pub fn move_player() {
+
 }

@@ -8,4 +8,7 @@
 [ ] Pathing en el cliente con sincronización al final
 [ ] Guardar en BD los estados
 [ ] Crear un mapa más decente
-[ ] Agregar git
+[X] Agregar git
+[ ] Spawnear Monstruos 
+[ ] Pathing Monstruos 
+[ ] Atacar monstruos y jugadores
