@@ -1,4 +1,5 @@
 pub mod pathing;
+pub mod monsters;
 
 use bevy::prelude::*;
 use bevy_renet::renet::*;
@@ -6,6 +7,15 @@ use bevy_renet::*;
 use serde::{Deserialize, Serialize};
 use std::{f32::consts::PI, time::Duration};
 
+// 0.14 (Solution 1)
+#[derive(States, Default, Hash, Debug, PartialEq, Clone, Eq)]
+pub enum AppState {
+    // Make this the default instead of `InMenu`.
+    #[default]
+    Setup,
+    _InMenu,
+    InGame,
+}
 
 
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
@@ -57,11 +67,32 @@ pub enum ServerChannel {
     Pong
 }
 
+
+#[derive(Debug, PartialEq, Component, Clone)]
+pub struct Monster {
+    pub hp: i32,
+    pub speed: f32,
+    pub kind: MonsterKind,
+    pub move_destination: Vec3,
+    pub move_timer: Timer
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+pub enum MonsterKind {
+    Pig,
+    Orc,
+}
+
 #[derive(Debug, Serialize, Deserialize, Component)]
 pub enum ServerMessages {
     PlayerCreate {
         entity: Entity,
         id: ClientId,
+        translation: [f32; 3],
+    },
+    SpawnMonster {
+        entity: Entity,
+        kind: MonsterKind,
         translation: [f32; 3],
     },
     PlayerRemove {
@@ -75,6 +106,10 @@ pub enum ServerMessages {
         entity: Entity,
     },
 }
+
+
+#[derive(Component)]
+pub struct MonsterParent; 
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct NetworkedEntities {

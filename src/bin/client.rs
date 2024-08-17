@@ -21,15 +21,6 @@ use bevy::input::common_conditions::input_toggle_active;
 use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
 
 
-// 0.14 (Solution 1)
-#[derive(States, Default, Hash, Debug, PartialEq, Clone, Eq)]
-enum AppState {
-    // Make this the default instead of `InMenu`.
-    #[default]
-    Setup,
-    _InMenu,
-    InGame,
-}
 
 
 
@@ -79,6 +70,19 @@ struct MyAssets {
     
 }
 
+
+#[derive(AssetCollection, Resource, Debug)]
+struct PigAssets {
+    #[asset(texture_atlas_layout(tile_size_x = 24, tile_size_y = 16, columns = 1, rows = 1, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 0))]
+    layout: Handle<TextureAtlasLayout>,
+    #[asset(path = "pig.png")]
+    sprite: Handle<Image>,
+
+    
+}
+
+
+
 #[derive(AssetCollection, Resource)]
 struct AcolyteAssets {
     #[asset(texture_atlas_layout(tile_size_x = 50, tile_size_y = 75, columns = 5, rows = 1, padding_x = 12, padding_y = 12, offset_x = 6, offset_y = 6))]
@@ -114,6 +118,7 @@ fn main() {
             LoadingState::new(AppState::Setup)
                 .continue_to_state(AppState::InGame)
                 .load_collection::<MyAssets>()
+                .load_collection::<PigAssets>()
                 .load_collection::<GridTarget>()
                 .load_collection::<AcolyteAssets>()
         )
@@ -287,7 +292,8 @@ fn client_sync_players(
     mut network_mapping: ResMut<NetworkMapping>,
     assets            : Res<MyAssets>,
     acolyte            : Res<AcolyteAssets>,
-    mut sprite_params : Sprite3dParams,
+    pig_assets            : Res<PigAssets>,
+    mut sprite_params : Sprite3dParams,       
 ) {
     let client_id = client_id.0;
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
@@ -324,7 +330,7 @@ fn client_sync_players(
                         .insert(ControlledPlayer) 
                         .insert(Velocity::default())
                         .insert(NotShadowCaster)
-                        .insert(CurrentMovementState { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
+                        .insert(TargetPos { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
                         .insert(OldMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
                         .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
                 }
@@ -364,6 +370,49 @@ fn client_sync_players(
                     commands.entity(entity).despawn();
                 }
             }
+            ServerMessages::SpawnMonster { entity, kind, translation } => {
+    
+                let texture_atlas: TextureAtlas = match kind {
+                    MonsterKind::Pig  => {
+                        TextureAtlas {
+                            layout: pig_assets.layout.clone(),
+                            index: 0,
+                        }
+                    },
+                    MonsterKind::Orc  => {
+                        TextureAtlas {
+                            layout: pig_assets.layout.clone(),
+                            index: 0,
+                        }
+                    }
+               
+                };
+                
+                let mut monster_entity = commands.spawn((
+                    Sprite3d {
+                        image: pig_assets.sprite.clone(),
+                        pixels_per_metre: 25.,
+                        alpha_mode: AlphaMode::Blend,
+                        unlit: true,
+                        transform: Transform::from_translation(translation.into()),
+                        // pivot: Some(Vec2::new(0.5, 0.5)),
+        
+                        ..default()
+                    }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
+                    kind,
+                    Name::new("Pig")
+                    )
+                );       
+
+                monster_entity.insert(Velocity::default());
+                /*let monster_entity = commands.spawn(PbrBundle {
+                    mesh: sprite_params.meshes.add(Mesh::from(Sphere::new(0.1))),
+                    material: sprite_params.materials.add(Color::srgb(1.0, 0.0, 0.0)),
+                    transform: Transform::from_translation(translation.into()),
+                    ..Default::default()
+                });*/
+                network_mapping.0.insert(entity, monster_entity.id());
+            }
         }
     }
 
@@ -376,15 +425,15 @@ fn client_sync_players(
                 translation.y = 2.0;
 
 
-                // println!("Player translation {:?}.", entity);
-                let transform = Transform {
+                //println!("Entity translation {:?}.", translation);
+                /*let transform = Transform {
                     translation,
                     ..Default::default()
-                };
+                };*/
                 // println!("Netwrok translation {:?}.", transform.translation);
                 //commands.entity(*entity).insert(transform);
 
-                let movement_state = CurrentMovementState {
+                let movement_state = TargetPos {
                     position: translation
                 };
 
@@ -567,7 +616,7 @@ fn sprite_movement(
 }
 /// Perform linear interpolation from old position to new position (runs in Update)
 fn interpolate_system(
-    mut query: Query<(&OldMovementState, &CurrentMovementState, &mut Transform)>,
+    mut query: Query<(&OldMovementState, &TargetPos, &mut Transform)>,
     time: Res<Time<Fixed>>,
 ) {
 
@@ -585,23 +634,23 @@ fn interpolate_system(
     }
 }
 
-fn transform_movement_interpolate(
+/*fn transform_movement_interpolate(
     fixed_time: Res<Time<Fixed>>,
     mut q_movement: Query<(
-        &mut Transform, &CurrentMovementState, &OldMovementState
+        &mut Transform, &TargetPos, &OldMovementState
     )>,
 ) {
     for (mut xf, state, old_state) in &mut q_movement {
         let a = fixed_time.overstep_fraction();
         xf.translation = old_state.position.lerp(state.position, a);
     }
-}
+}*/
 
 
 
 fn click_move_players_system(
     mut query: Query<(Entity, &mut Velocity, &PlayerCommand, &mut Transform)>,
-    map: ResMut<Map>,
+    map: Res<Map>,
     mut commands: Commands
 ) {
 

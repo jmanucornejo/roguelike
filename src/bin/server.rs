@@ -2,11 +2,15 @@
 
 use bevy::log::{LogPlugin};
 use bevy::prelude::*;
+use bevy_asset_loader::prelude::*;
 use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use bevy_renet::renet::{ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
 use bevy_renet::transport::NetcodeServerPlugin;
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use bevy::input::common_conditions::input_toggle_active;
 use bevy_renet::RenetServerPlugin;
 use local_ip_address::local_ip;
+use monsters::*;
 use pathing::*;
 use roguelike::*;
 use std::collections::HashMap;
@@ -14,7 +18,7 @@ use std::{
     net::{SocketAddr, UdpSocket},
     time::SystemTime,
 };
-use pathfinding::prelude::{astar, bfs};
+
 
 
 
@@ -52,7 +56,11 @@ fn main() {
             level: bevy::log::Level::DEBUG,
             ..Default::default()
         }))
+        .add_plugins(  
+            WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
+        )
         .add_plugins(PathingPlugin)
+     
        // .add_plugins(MinimalPlugins)
         //.add_plugins(LogPlugin::default())
         .add_systems(
@@ -62,6 +70,9 @@ fn main() {
                 // setup_prohibited_areas.after(setup_level),
             )
         )
+        .init_state::<AppState>()
+    
+        .add_plugins(MonstersPlugin)
         .add_plugins(RenetServerPlugin)
         .insert_resource(ServerLobby::default())
         .insert_resource(Map::default())
@@ -78,9 +89,10 @@ fn main() {
         )
         .add_systems(
             FixedUpdate, (
-                server_network_sync,                
-                click_move_players_system
-                
+                server_network_sync,      
+                          
+                click_move_players_system,
+                //monster_test
             )
         )
         .add_systems(PostUpdate, projectile_on_removal_system)
@@ -132,12 +144,25 @@ fn server_events(
     mut lobby: ResMut<ServerLobby>,
     mut server: ResMut<RenetServer>,
     players: Query<(Entity, &Player, &Transform)>,
+    monsters: Query<(Entity, &Monster, &Transform), With<Monster>>,
 ) {
 
     for event in server_events.read() {
         match event {
             ServerEvent::ClientConnected { client_id } => {
                 println!("Client {client_id} connected");
+
+                // Initialize monsters for this new client
+                for (entity, monster,  transform) in monsters.iter() {
+                    let translation: [f32; 3] = transform.translation.into();
+                    let message = bincode::serialize(&ServerMessages::SpawnMonster {
+                        entity,
+                        kind: monster.kind.clone(),
+                        translation,
+                    })
+                    .unwrap();
+                    server.send_message(*client_id, ServerChannel::ServerMessages, message);
+                }
 
                 // Initialize other players for this new client
                 for (entity, player, transform) in players.iter() {
@@ -162,7 +187,7 @@ fn server_events(
                     })
                     .insert(PlayerInput::default())
                     .insert(Velocity::default())
-                    .insert(CurrentMovementState { position: transform.translation})
+                    .insert(TargetPos { position: transform.translation})
                     .insert(Player { id: *client_id })
                     .id();
 
@@ -280,24 +305,38 @@ pub fn setup_simple_camera(mut commands: Commands) {
 fn click_move_players_system(
     mut commands: Commands,
     mut query: Query<(&mut Velocity, &PlayerCommand, &mut Transform, Entity)>,
-    map: ResMut<Map>
+    map: Res<Map>
 ) {
     for (mut velocity, command, mut transform, entity) in query.iter_mut() {
         match command {
             PlayerCommand::Move { destination_at } => {  
 
-                let start: Pos = Pos(
+
+              
+                /*let start: Pos = Pos(
                     transform.translation.x.round() as i32, 
                     transform.translation.z.round() as i32
-                );
+                );*/
                 let goal: Pos = Pos(
                     destination_at.x as i32, 
                     destination_at.z as i32
                 );    
 
-                if((destination_at.x != transform.translation.x || destination_at.z != transform.translation.z) && !map.blocked_paths.contains(&goal)) {                     
+                let target = get_next_step(transform.translation.into(), goal, &map); 
+
+                if let Some(final_pos) = target {    
+
+                    //info!("Final Pos: {:?}!", final_pos);    
+                    // Se cambia el punto objetivo.
+                    commands.entity(entity).insert(TargetPos {
+                        position: final_pos,
+                    });
+             
+                }
+
+                /*if((destination_at.x != transform.translation.x || destination_at.z != transform.translation.z) && !map.blocked_paths.contains(&goal)) {                     
     
-                    info!("Start   {:?}!  Goal  {:?}!", start,goal);
+                    // info!("Start   {:?}!  Goal  {:?}!", start,goal);
 
                     //let succesors = get_succesors(&start, &map);                        
                     let astar_result = astar(
@@ -307,7 +346,7 @@ fn click_move_players_system(
                         |p| *p==goal);
 
 
-                    info!("*Star Result {:?}! ",astar_result);    
+                    //info!("*Star Result {:?}! ",astar_result);    
 
                
                     if let Some(result) = astar_result{
@@ -325,46 +364,15 @@ fn click_move_players_system(
 
                             //info!("Final Pos: {:?}!", final_pos);    
                             // Se cambia el punto objetivo.
-                            commands.entity(entity).insert(CurrentMovementState {
+                            commands.entity(entity).insert(TargetPos {
                                 position: Vec3 { x: x as f32, y: 2.0, z: z as f32},
                             });
-
-                            // velocity.0 = calculate_velocity(transform.translation, Vec3 { x: x as f32, y: 2.0, z: z as f32} );
-                            
-                            /*info!("calculated_velocity: {:?}!", calculated_velocity);   
-                            //info!("*Star Result Next step  x: {:?}! z: {:?}!", x, z);    
-                            info!("Translation: {:?}!", transform.translation);   
-                            let distance_x = x as f32 - transform.translation.x;
-                            //info!("*Star Result distance_x  x: {:?}!", distance_x);   
-
-                            if distance_x.abs() < 0.2 && (steps_left == 1 || steps_left == 0)  {
-                                velocity.0.x = 0.0;
-                                transform.translation.x = destination_at.x;
-                            }        
-                            else if distance_x > 0.0 {
-                                velocity.0.x = PLAYER_MOVE_SPEED;
-                            }
-                            else if  distance_x < 0.0 {
-                                velocity.0.x = -PLAYER_MOVE_SPEED;
-                            }
-                        
-                            let distance_z = z as f32 - transform.translation.z;         
-
-                            if  distance_z.abs() < 0.2  && (steps_left == 1 || steps_left == 0)  {
-                                velocity.0.z = 0.0; 
-                                transform.translation.z = destination_at.z;
-                            }                    
-                            else if distance_z > 0.0 {
-                                velocity.0.z = PLAYER_MOVE_SPEED;
-                            }
-                            else if  distance_z < 0.0 {
-                                velocity.0.z = -PLAYER_MOVE_SPEED;
-                            }*/                            
+                     
                        }
                       
                     }        
                   
-                }
+                }*/
             },
             _  =>{}
         }
@@ -395,7 +403,7 @@ fn projectile_on_removal_system(mut server: ResMut<RenetServer>, mut removed_pro
 
 
 #[allow(clippy::type_complexity)]
-fn server_network_sync(mut server: ResMut<RenetServer>, query: Query<(Entity, &Transform), Or<(With<Player>, With<Projectile>)>>) {
+fn server_network_sync(mut server: ResMut<RenetServer>, query: Query<(Entity, &Transform), Or<(With<Player>, With<Projectile>, With<Monster>)>>) {
     let mut networked_entities = NetworkedEntities::default();
     for (entity, transform) in query.iter() {
         networked_entities.entities.push(entity);
@@ -405,3 +413,14 @@ fn server_network_sync(mut server: ResMut<RenetServer>, query: Query<(Entity, &T
     let sync_message = bincode::serialize(&networked_entities).unwrap();
     server.broadcast_message(ServerChannel::NetworkedEntities, sync_message);
 }
+
+#[allow(clippy::type_complexity)]
+fn monster_test(query: Query<(Entity, &Transform), With<Monster>>) {
+   
+    for (entity, transform) in query.iter() {
+        println!("Monster {:?}.", transform.translation);
+    }
+
+  
+}
+

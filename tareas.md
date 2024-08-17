@@ -9,6 +9,9 @@
 [ ] Guardar en BD los estados
 [ ] Crear un mapa más decente
 [X] Agregar git
-[ ] Spawnear Monstruos 
-[ ] Pathing Monstruos 
+[X] Spawnear Monstruos 
+[X] Pathing Monstruos 
 [ ] Atacar monstruos y jugadores
+[ ] Cambiar de un mapa a otro
+[ ] Tiempo de casting y aspd
+[ ] No caminar a una celda donde ya hay alguien 
