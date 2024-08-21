@@ -19,29 +19,9 @@ use std::{
     time::SystemTime,
 };
 
-
-
-
-
-
-/* 
-impl Pos {
-    fn successors(&self) -> Vec<Pos> {
-      let &Pos(x, z) = self;
-      vec![Pos(x+1,z+1), Pos(x+1,z), Pos(x+1,z-1), Pos(x,z+1),
-           Pos(x,z-1), Pos(x-1,z-1), Pos(x-1,z+1), Pos(x-1,z)]  
-    }
-
-    fn astar_successors(&self) -> Vec<(Pos, u32)> {
-        let &Pos(x, z) = self;
-        vec![Pos(x+1,z+1), Pos(x+1,z), Pos(x+1,z-1), Pos(x,z+1),
-             Pos(x,z-1), Pos(x-1,z-1), Pos(x-1,z+1), Pos(x-1,z)]  
-             .into_iter().map(|p| (p, 1)).collect()  // Le pone peso de 1 a todo
-    }
-}*/
-
-
-
+use bevy_spatial::{kdtree::KDTree3, AutomaticUpdate, SpatialAccess};
+use renet_visualizer::{RenetServerVisualizer, RenetVisualizerStyle};
+use bevy_egui::{EguiContexts, EguiPlugin};
 
 #[derive(Debug, Default, Resource)]
 pub struct ServerLobby {
@@ -50,17 +30,19 @@ pub struct ServerLobby {
 
 
 fn main() {
-    App::new()
+    App::new()   
+       
         .add_plugins(DefaultPlugins.set(LogPlugin {
             filter: "info,wgpu_core=warn,wgpu_hal=off,rechannel=warn".into(),
             level: bevy::log::Level::DEBUG,
             ..Default::default()
         }))
+        //.add_plugins(EguiPlugin)
         .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
         )
         .add_plugins(PathingPlugin)
-     
+        .add_plugins(AutomaticUpdate::<NearestNeighbourComponent>::new())
        // .add_plugins(MinimalPlugins)
         //.add_plugins(LogPlugin::default())
         .add_systems(
@@ -71,9 +53,12 @@ fn main() {
             )
         )
         .init_state::<AppState>()
-    
+     
         .add_plugins(MonstersPlugin)
         .add_plugins(RenetServerPlugin)
+        .insert_resource(RenetServerVisualizer::<200>::new(
+            RenetVisualizerStyle::default(),
+        ))
         .insert_resource(ServerLobby::default())
         .insert_resource(Map::default())
         .insert_resource(create_renet_server())
@@ -84,13 +69,14 @@ fn main() {
             Update, 
             (
                 server_events, 
-                update_projectiles_system,                
+                update_projectiles_system,          
+                // update_visualizer_system      
             )
         )
         .add_systems(
             FixedUpdate, (
-                server_network_sync,      
-                          
+                // server_network_sync,      
+                server_network_sync_player_out,          
                 click_move_players_system,
                 //monster_test
             )
@@ -135,6 +121,11 @@ fn create_renet_transport() -> NetcodeServerTransport {
 
 }
 
+fn update_visualizer_system(mut egui_contexts: EguiContexts, mut visualizer: ResMut<RenetServerVisualizer<200>>, server: Res<RenetServer>) {
+    visualizer.update(&server);
+    visualizer.show_window(egui_contexts.ctx_mut());
+}
+
 
 fn server_events(
     mut server_events: EventReader<ServerEvent>, 
@@ -145,14 +136,51 @@ fn server_events(
     mut server: ResMut<RenetServer>,
     players: Query<(Entity, &Player, &Transform)>,
     monsters: Query<(Entity, &Monster, &Transform), With<Monster>>,
+    treeaccess: Res<NNTree>,
+    mut server_visualizer: ResMut<RenetServerVisualizer<200>>,
 ) {
 
     for event in server_events.read() {
         match event {
             ServerEvent::ClientConnected { client_id } => {
                 println!("Client {client_id} connected");
+                server_visualizer.add_client(*client_id);
+                // Get player spawning poing.
+                let transform = Transform::from_xyz((fastrand::f32() - 0.5) * 40., 1.0, (fastrand::f32() - 0.5) * 40.);
+                info!("entity  transform {:?}", transform);
+                
+                // Find all entities within 12 cells of translation.
+                for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
+                    // info!("entity {:?}", entity);
 
-                // Initialize monsters for this new client
+                    // Initialize monsters for this new client
+                    if let Ok( (entity, monster,  monster_transform)) = monsters.get(entity.expect("No entity")) {
+
+                        let message = bincode::serialize(&ServerMessages::SpawnMonster {
+                            entity,
+                            kind: monster.kind.clone(),
+                            translation: monster_transform.translation.into(),
+                        })
+                        .unwrap();
+                        server.send_message(*client_id, ServerChannel::ServerMessages, message);
+                    }
+
+                    // Initialize Players for this new client
+                    if let Ok( (entity, player,  player_transform)) = players.get(entity.expect("No entity")) {
+
+                        let message = bincode::serialize(&ServerMessages::PlayerCreate {
+                            id: player.id,
+                            entity,
+                            translation: player_transform.translation.into(),
+                        })
+                        .unwrap();
+                        server.send_message(*client_id, ServerChannel::ServerMessages, message);
+                    }
+                    
+                   
+                }
+                /*
+                // Antiguo, cuando se mostraba todo a todo el mundo.
                 for (entity, monster,  transform) in monsters.iter() {
                     let translation: [f32; 3] = transform.translation.into();
                     let message = bincode::serialize(&ServerMessages::SpawnMonster {
@@ -162,10 +190,10 @@ fn server_events(
                     })
                     .unwrap();
                     server.send_message(*client_id, ServerChannel::ServerMessages, message);
-                }
+                }*/
 
                 // Initialize other players for this new client
-                for (entity, player, transform) in players.iter() {
+                /*for (entity, player, transform) in players.iter() {
                     let translation: [f32; 3] = transform.translation.into();
                     let message = bincode::serialize(&ServerMessages::PlayerCreate {
                         id: player.id,
@@ -174,10 +202,9 @@ fn server_events(
                     })
                     .unwrap();
                     server.send_message(*client_id, ServerChannel::ServerMessages, message);
-                }
+                }*/
 
-                // Spawn new player
-                let transform = Transform::from_xyz((fastrand::f32() - 0.5) * 40., 1.0, (fastrand::f32() - 0.5) * 40.);
+                // Spawn new player              
                 let player_entity = commands
                     .spawn(PbrBundle {
                         mesh: meshes.add(Mesh::from(Capsule3d::default())),
@@ -187,24 +214,63 @@ fn server_events(
                     })
                     .insert(PlayerInput::default())
                     .insert(Velocity::default())
+                    .insert(NearestNeighbourComponent)
                     .insert(TargetPos { position: transform.translation})
                     .insert(Player { id: *client_id })
                     .id();
 
                 lobby.players.insert(*client_id, player_entity);
 
-                let translation: [f32; 3] = transform.translation.into();
+                // Esto se puede mejorar... no debería ser necesario loopear por todas las cosas cercanas al jugador. 
+                // Solo comparar el Vec3 del jugador existente con el Vec3 del nuevo jugador
+                // Si están a menos de 12, spawnear.
+                for (_entity, player, player_transform) in players.iter() {
+
+                    for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
+                        // info!("entity {:?}", entity);
+
+                        if let Some(entity) = entity {
+                            if(entity == player_entity) {
+                                let message = bincode::serialize(&ServerMessages::PlayerCreate {
+                                    id: *client_id,
+                                    entity: player_entity,
+                                    translation: transform.translation.into(),
+                                })
+                                .unwrap();
+                
+                                     // Send message to only one client
+                                server.send_message(player.id, ServerChannel::ServerMessages, message);
+                                //*handle = colors.black.clone();
+                            }
+                        }                   
+                       
+                    }
+                }
+
+                // Spawn self.
                 let message = bincode::serialize(&ServerMessages::PlayerCreate {
                     id: *client_id,
                     entity: player_entity,
-                    translation,
+                    translation: transform.translation.into(),
                 })
                 .unwrap();
-                server.broadcast_message(ServerChannel::ServerMessages, message);
+
+                // Send message to only one client
+                server.send_message(*client_id, ServerChannel::ServerMessages, message);
+
+                /*let message = bincode::serialize(&ServerMessages::PlayerCreate {
+                    id: *client_id,
+                    entity: player_entity,
+                    translation: transform.translation.into(),
+                })
+                .unwrap();
+                server.broadcast_message(ServerChannel::ServerMessages, message);*/
  
             }
             ServerEvent::ClientDisconnected { client_id, reason } => {
                 println!("Player {} disconnected: {}", client_id, reason);
+
+                server_visualizer.remove_client(*client_id);
                 //visualizer.remove_client(*client_id);
                 if let Some(player_entity) = lobby.players.remove(client_id) {
                     commands.entity(player_entity).despawn();
@@ -413,6 +479,54 @@ fn server_network_sync(mut server: ResMut<RenetServer>, query: Query<(Entity, &T
     let sync_message = bincode::serialize(&networked_entities).unwrap();
     server.broadcast_message(ServerChannel::NetworkedEntities, sync_message);
 }
+
+
+#[allow(clippy::type_complexity)]
+fn server_network_sync_player_out(
+    mut server: ResMut<RenetServer>, 
+    players: Query<(&Player, &Transform)>,
+    mut query: Query<(Entity, &Transform), ( Or<(With<Player>, With<Projectile>, With<Monster>, With<NearestNeighbourComponent>)>)>,
+    treeaccess: Res<NNTree>
+  
+) {
+    for (player, transform) in players.iter() {
+
+        let mut networked_entities = NetworkedEntities::default();
+
+        for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
+            // info!("entity {:?}", entity);
+            if let Ok( (entity, mut transform)) = query.get_mut(entity.expect("No entity")) {
+
+                networked_entities.entities.push(entity);
+                networked_entities.translations.push(transform.translation.into());
+
+            }          
+           
+        }
+      
+        let sync_message = bincode::serialize(&networked_entities).unwrap();
+        // Send message to only one client
+        server.send_message(player.id, ServerChannel::NetworkedEntities, sync_message);
+        //*handle = colors.black.clone();
+
+    }
+ 
+
+
+    /*let mut networked_entities = NetworkedEntities::default();
+    for (entity, transform) in query.iter() {
+        networked_entities.entities.push(entity);
+        networked_entities.translations.push(transform.translation.into());
+    }
+
+    let sync_message = bincode::serialize(&networked_entities).unwrap();
+    // Send message to only one client
+    server.send_message(client_id, ServerChannel::NetworkedEntities, sync_message);
+
+    
+    server.broadcast_message(ServerChannel::NetworkedEntities, sync_message);*/
+}
+
 
 #[allow(clippy::type_complexity)]
 fn monster_test(query: Query<(Entity, &Transform), With<Monster>>) {

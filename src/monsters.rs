@@ -95,6 +95,7 @@ impl Plugin for MonstersPlugin {
                             )
                         )
                         .insert(Velocity::default())
+                        .insert(NearestNeighbourComponent)
                         .insert(TargetPos { position: transform.translation.into() });       
                     });
 
@@ -154,7 +155,7 @@ impl Plugin for MonstersPlugin {
                         z: transform.translation.z.round() + fastrand::i32(-10..10) as f32
                     };                
 
-                    info!("Se acabó timer. Se mueve monstruo a {:?}", monster.move_destination);
+                    //info!("Se acabó timer. Se mueve monstruo a {:?}", monster.move_destination);
 
                     monster.move_timer = Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once);
                    

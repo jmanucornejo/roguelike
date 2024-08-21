@@ -1,6 +1,7 @@
 pub mod pathing;
 pub mod monsters;
 
+use bevy_spatial::{kdtree::KDTree3};
 use bevy::prelude::*;
 use bevy_renet::renet::*;
 use bevy_renet::*;
@@ -19,6 +20,7 @@ pub enum AppState {
 
 
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
+pub const LINE_OF_SIGHT: f32 = 12.0;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -66,6 +68,12 @@ pub enum ServerChannel {
     NetworkedEntities,
     Pong
 }
+
+
+#[derive(Component)]
+pub struct NearestNeighbourComponent;
+
+pub type NNTree = KDTree3<NearestNeighbourComponent>;
 
 
 #[derive(Debug, PartialEq, Component, Clone)]
@@ -210,7 +218,7 @@ pub fn setup_level(
 ) {
     // plane
     commands.spawn((PbrBundle {
-        mesh: meshes.add(Mesh::from(Cuboid::new(41., 0.0, 41.))),
+        mesh: meshes.add(Mesh::from(Cuboid::new(301., 0.0, 301.))),
         material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
         transform: Transform::from_xyz(0.0, 0.99, 0.0),
         ..Default::default()
