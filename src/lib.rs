@@ -21,6 +21,8 @@ pub enum AppState {
 
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
+pub const TRANSLATION_PRECISION: f32 = 0.001;
+pub const INTERPLOATE_BUFFER: u128 = 200;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -37,6 +39,28 @@ pub enum ServerMessage {
 
 #[derive(Debug, Default, Component)]
 pub struct Velocity(pub Vec3);
+
+
+#[derive(Component)]
+pub struct PrevState {
+    pub translation: Vec3,
+    pub rotation: Rotation
+}
+#[derive(Component,  PartialEq)]
+
+pub struct MovementDelta {
+    pub translation: IVec3,
+    pub rotation: Rotation,
+    pub server_time: u128,
+    pub real_translation: [f32; 3]
+}
+
+
+
+
+
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Component, Clone)]
+pub struct Rotation(pub i8);
 
 #[derive(Debug, Component)]
 pub struct Player {
@@ -97,14 +121,25 @@ pub enum ServerMessages {
         entity: Entity,
         id: ClientId,
         translation: [f32; 3],
+        server_time: u128
     },
     SpawnMonster {
         entity: Entity,
         kind: MonsterKind,
         translation: [f32; 3],
+        server_time: u128
     },
     PlayerRemove {
         id: ClientId,
+    },
+    MoveDelta {
+        entity: Entity,
+        x: i32,
+        y: i32,
+        z: i32,
+        rotation: Rotation,
+        server_time: u128,
+        real_translation: [f32; 3],
     },
     SpawnProjectile {
         entity: Entity,

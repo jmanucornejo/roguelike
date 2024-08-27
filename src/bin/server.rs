@@ -19,6 +19,8 @@ use std::{
     time::SystemTime,
 };
 
+use std::ops::Div;
+use std::ops::Mul;
 use bevy_spatial::{kdtree::KDTree3, AutomaticUpdate, SpatialAccess};
 use renet_visualizer::{RenetServerVisualizer, RenetVisualizerStyle};
 use bevy_egui::{EguiContexts, EguiPlugin};
@@ -27,7 +29,6 @@ use bevy_egui::{EguiContexts, EguiPlugin};
 pub struct ServerLobby {
     pub players: HashMap<ClientId, Entity>,
 }
-
 
 fn main() {
     App::new()   
@@ -76,7 +77,8 @@ fn main() {
         .add_systems(
             FixedUpdate, (
                 // server_network_sync,      
-                server_network_sync_player_out,          
+                //server_network_sync_player_out,    
+                network_send_delta_position_system,      
                 click_move_players_system,
                 //monster_test
             )
@@ -138,6 +140,7 @@ fn server_events(
     monsters: Query<(Entity, &Monster, &Transform), With<Monster>>,
     treeaccess: Res<NNTree>,
     mut server_visualizer: ResMut<RenetServerVisualizer<200>>,
+    time: Res<Time>,
 ) {
 
     for event in server_events.read() {
@@ -160,6 +163,7 @@ fn server_events(
                             entity,
                             kind: monster.kind.clone(),
                             translation: monster_transform.translation.into(),
+                            server_time: time.elapsed().as_millis()
                         })
                         .unwrap();
                         server.send_message(*client_id, ServerChannel::ServerMessages, message);
@@ -172,6 +176,7 @@ fn server_events(
                             id: player.id,
                             entity,
                             translation: player_transform.translation.into(),
+                            server_time: time.elapsed().as_millis()
                         })
                         .unwrap();
                         server.send_message(*client_id, ServerChannel::ServerMessages, message);
@@ -214,9 +219,12 @@ fn server_events(
                     })
                     .insert(PlayerInput::default())
                     .insert(Velocity::default())
+                    .insert(Rotation(0) )                        
+                    .insert(PrevState { translation: transform.translation, rotation: Rotation(0)})
                     .insert(NearestNeighbourComponent)
                     .insert(TargetPos { position: transform.translation})
                     .insert(Player { id: *client_id })
+                 
                     .id();
 
                 lobby.players.insert(*client_id, player_entity);
@@ -235,6 +243,7 @@ fn server_events(
                                     id: *client_id,
                                     entity: player_entity,
                                     translation: transform.translation.into(),
+                                    server_time: time.elapsed().as_millis()
                                 })
                                 .unwrap();
                 
@@ -252,6 +261,7 @@ fn server_events(
                     id: *client_id,
                     entity: player_entity,
                     translation: transform.translation.into(),
+                    server_time: time.elapsed().as_millis()
                 })
                 .unwrap();
 
@@ -528,13 +538,52 @@ fn server_network_sync_player_out(
 }
 
 
-#[allow(clippy::type_complexity)]
-fn monster_test(query: Query<(Entity, &Transform), With<Monster>>) {
-   
-    for (entity, transform) in query.iter() {
-        println!("Monster {:?}.", transform.translation);
+pub fn network_send_delta_position_system(
+    mut server: ResMut<RenetServer>, 
+    players: Query<(&Player, &Transform)>,
+    mut query: Query<(Entity, &Transform, &Rotation,  &mut PrevState), Changed<Transform>>,
+    treeaccess: Res<NNTree>,
+    time: Res<Time>,
+) {
+    for (player, transform) in players.iter() {
+
+        for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
+
+
+            if let Ok( (entity, mut transform, rotation, mut prev_state)) = query.get_mut(entity.expect("No entity")) {
+                
+                let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.01
+
+                let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
+
+                if prev_state.rotation != *rotation || delta_translation != IVec3::ZERO {
+                    println!("message_sent {:?} .", time.elapsed().as_millis());
+                    println!("prev_translation {:?} .", prev_state.translation);                   
+                    println!("delta_translation {:?} .", delta_translation);
+                    println!("real_translation {:?} .", transform.translation);
+                    
+                    let message= ServerMessages::MoveDelta {
+                        entity,
+                        x: delta_translation.x,
+                        y: delta_translation.y,
+                        z: delta_translation.z,
+                        rotation: rotation.clone(),
+                        server_time: time.elapsed().as_millis(),
+                        real_translation: transform.translation.into(),
+                    };
+
+                    let sync_message = bincode::serialize(&message).unwrap();
+                    // Send message to only one client
+                    server.send_message(player.id, ServerChannel::ServerMessages, sync_message);                    
+       
+                }
+    
+                prev_state.translation = transform.translation;
+                prev_state.rotation = rotation.clone();
+
+
+            }
+         
+        }
     }
-
-  
 }
-

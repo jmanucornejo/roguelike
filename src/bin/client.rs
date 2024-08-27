@@ -10,7 +10,7 @@ use bevy_renet::{renet::*, transport::NetcodeClientPlugin};
 use bevy_renet::*;
 use bevy_renet::renet::transport::NetcodeClientTransport;
 use std::{
-    collections::HashMap, net::{SocketAddr, UdpSocket}, time::SystemTime
+    collections::HashMap, net::{SocketAddr, UdpSocket}, time::{Duration, SystemTime}
 };
 use bevy_asset_loader::prelude::*;
 
@@ -21,12 +21,20 @@ use bevy::input::common_conditions::input_toggle_active;
 // use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TouchControls};
 use std::f32::consts::TAU;
-
+use std::ops::Div;
+use std::ops::Mul;
 
 
 #[derive(Component, Debug)]
 struct OldMovementState {
     position: Vec3,
+    server_time: u128
+}
+
+#[derive(Component)]
+struct MyMovementState {
+    position: Vec3,
+    server_time: u128
 }
 
 
@@ -38,6 +46,10 @@ struct Billboard;
 
 #[derive(Default, Resource, )]
 struct NetworkMapping(HashMap<Entity, Entity>);
+
+
+#[derive(Default, Resource)]
+struct ServerTime(u128);
 
 #[derive(Debug)]
 struct PlayerInfo {
@@ -57,6 +69,13 @@ struct CurrentClientId(u64);
 #[derive(Component)]
 struct Target;
 
+
+#[derive(Component, Debug)]
+struct DeltaBuffer(Vec<(IVec3, u128)>);
+
+#[derive(Component, Debug)]
+struct 
+CreatedAtServerTime(u128);
 
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
@@ -136,13 +155,14 @@ fn main() {
         .insert_resource(ClientLobby::default())
         .insert_resource(Map::default())
         .insert_resource(NetworkMapping::default())
+        .insert_resource(ServerTime::default())
         .add_event::<PlayerCommand>()
         .add_plugins(NetcodeClientPlugin)   
       
         .add_systems(Update, client_ping)
         .add_systems(Startup, (setup_level,setup_camera))
         .add_plugins(Sprite3dPlugin)
-        .add_plugins(PathingPlugin)
+        // .add_plugins(PathingPlugin)
         .add_systems(OnEnter(AppState::InGame), ((setup_player, setup_target)))
         .add_systems(Update, 
             (
@@ -154,16 +174,20 @@ fn main() {
                 //transform_movement_interpolate.run_if(in_state(AppState::InGame))
                 //interpolate_system.run_if(in_state(AppState::InGame))
                 billboard.run_if(in_state(AppState::InGame)),
+                // client_lerp.run_if(in_state(AppState::InGame)),
                
             )
         )  
         .add_systems(
             FixedUpdate, (
-                // client_sync_players.run_if(in_state(AppState::InGame)),
-                client_sync_entities.run_if(in_state(AppState::InGame)),
+                // client_move_entities.run_if(in_state(AppState::InGame)),
+                client_sync_players.run_if(in_state(AppState::InGame)),
+                // client_sync_entities.run_if(in_state(AppState::InGame)),
                 //click_move_players_system.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
-              
+                //client_process_buffer.run_if(in_state(AppState::InGame)),
+                client_process_buffer2.run_if(in_state(AppState::InGame)),
+        
                 // sprite_movement.run_if(in_state(AppState::InGame))
             )
         );
@@ -299,13 +323,15 @@ fn client_sync_players(
     acolyte            : Res<AcolyteAssets>,
     pig_assets            : Res<PigAssets>,
     mut sprite_params : Sprite3dParams,       
+    mut entities: Query<(Entity, &Transform, &mut MyMovementState, &mut OldMovementState, &mut TargetPos, &mut DeltaBuffer)>, 
+    mut server_time_res: ResMut<ServerTime>,
 ) {
     let client_id = client_id.0;
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
         let server_message = bincode::deserialize(&message).unwrap();
         match server_message {
-            ServerMessages::PlayerCreate { id, translation, entity } => {
-                println!("Player {} connected.", id);     
+            ServerMessages::PlayerCreate { id, translation, entity , server_time } => {
+                println!("Player {} connected at translation  {:?}", id, translation);     
 
                 let texture_atlas = TextureAtlas {
                     layout: acolyte.layout.clone(),
@@ -330,10 +356,17 @@ fn client_sync_players(
                         .insert(ControlledPlayer) 
                         .insert(Billboard)
                         .insert(Velocity::default())
+                        .insert(Rotation(0) )
                         .insert(NotShadowCaster)
+                        .insert(DeltaBuffer(Vec::new()))
+                        .insert(PrevState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })
+                        .insert(CreatedAtServerTime(server_time))
                         .insert(TargetPos { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
-                        .insert(OldMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
+                        .insert(OldMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time })
+                        .insert(MyMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time})
                         .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
+
+                    server_time_res.0 = server_time;
                 }
 
                 let player_info = PlayerInfo {
@@ -371,7 +404,7 @@ fn client_sync_players(
                     commands.entity(entity).despawn();
                 }
             }
-            ServerMessages::SpawnMonster { entity, kind, translation } => {
+            ServerMessages::SpawnMonster { entity, kind, translation , server_time} => {
     
                 let texture_atlas: TextureAtlas = match kind {
                     MonsterKind::Pig  => {
@@ -405,7 +438,12 @@ fn client_sync_players(
                     )
                 );       
 
-                monster_entity.insert(Billboard).insert(Velocity::default());
+                monster_entity
+                    .insert(Billboard)
+                    .insert(Velocity::default())
+                    .insert(Rotation(0))
+                    .insert(OldMovementState { position: translation.into(), server_time })
+                    .insert(MyMovementState { position: translation.into(), server_time });
                 /*let monster_entity = commands.spawn(PbrBundle {
                     mesh: sprite_params.meshes.add(Mesh::from(Sphere::new(0.1))),
                     material: sprite_params.materials.add(Color::srgb(1.0, 0.0, 0.0)),
@@ -413,6 +451,50 @@ fn client_sync_players(
                     ..Default::default()
                 });*/
                 network_mapping.0.insert(entity, monster_entity.id());
+            },
+            ServerMessages::MoveDelta { entity, x, y,z, rotation, server_time , real_translation} => {
+                //println!("Message received  {} ", server_time);
+
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                  
+                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut delta_buffer)) = entities.get_mut(*client_entity) {
+                      
+
+                     
+
+                        let quantized_delta = IVec3 { 
+                            x: x,
+                            y: y,
+                            z: z
+                        };       
+                        //let unquantized_delta = quantized_delta.as_vec3().mul(TRANSLATION_PRECISION);
+
+                        delta_buffer.0.push((quantized_delta, server_time));             
+
+                        /*let unquantized_delta = quantized_delta.as_vec3().mul(TRANSLATION_PRECISION);
+                        state.position =   state.position +  unquantized_delta;
+
+                        target_pos.position = state.position;*/
+                    }
+                }
+              
+                /*if let Some(entity) = network_mapping.0.get(&entity) {
+
+                    let movement_delta = MovementDelta {
+                        translation: IVec3 { 
+                            x: x,
+                            y: y,
+                            z: z
+                        },
+                        rotation: rotation,
+                        server_time,
+                        real_translation
+                    };
+                    println!("Se inserta info   {:?} ", movement_delta.translation);
+                    commands.entity(*entity).insert(movement_delta);
+                }*/
+
+               
             }
         }
     }
@@ -444,7 +526,457 @@ fn client_sync_players(
     }*/
 }
 
+fn client_process_buffer2(
+    mut query: Query<(&mut DeltaBuffer, &mut PrevState, &CreatedAtServerTime, &mut Transform)>, 
+    mut server_time_res: ResMut<ServerTime>,
+    client_time: Res<Time>,
+) {
 
+
+    for(mut delta_buffer, mut prev_state, created_at, mut transform) in query.iter_mut() {
+
+        let initial_server_time =  server_time_res.0;      
+        let mut render_time =  initial_server_time + client_time.elapsed().as_millis()  - INTERPLOATE_BUFFER;   
+
+        delta_buffer.0.sort_by(|a, b| a.1.cmp(&b.1));
+
+
+        // println!("sorted_delta_buffer  {:?} ", delta_buffer );
+        let original_translation = transform.translation;
+
+        while delta_buffer.0.len() > 0 {
+
+            if let Some((delta, event_time)) = delta_buffer.0.get(0) {  
+              
+
+                if(&render_time < event_time) {
+                    println!("aún no se llega a este evento porque render_time {:?} es menor que el event_time {:?} ", render_time, event_time );
+                    break;
+                }  
+
+                if let Some((next_delta, next_event_time)) = delta_buffer.0.get(1) {
+
+                    println!("sorted_delta_buffer  {:?} ", render_time );
+
+                    let next_unquantized_delta = next_delta.as_vec3().mul(TRANSLATION_PRECISION);
+                    
+                    // En caso ha llegado en desorden el evento.
+                    if(event_time > next_event_time) {
+
+                        println!("llego en desorden! ");
+                        // Se ajusta nomás el delta del evento perdido directo a la posición actual.
+                      
+                        transform.translation = transform.translation + next_unquantized_delta;
+                        delta_buffer.0.remove(1);
+                        break;
+                    }
+
+                    println!("original_translation  {:?}", prev_state.translation);
+
+                    let progress  = ((render_time - event_time) as f32 / (next_event_time - event_time) as f32 );
+                    println!("progress  {:?} ", progress );
+                    let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
+                   
+         
+                    let prev_position =  prev_state.translation + unquantized_delta;
+                    let next_position =  prev_position + next_unquantized_delta;
+
+                    println!("current_pos  {:?} , prev_pos {:?} , next_pos {:?} ", transform.translation, prev_position , next_position );
+    
+                    transform.translation = prev_position.lerp(next_position, progress);
+
+                    prev_state.translation = prev_position;
+
+                    println!("Final position  {:?} ", transform.translation );
+                    //println!(original_translation
+                    //println!("delta_buffer  {:?}", delta_buffer );
+                  
+                    /*if delta_buffer.0.get(2).is_none()  {
+                        delta_buffer.0.remove(1);
+                    }*/
+
+                    delta_buffer.0.remove(0);
+                    //println!("delta_buffer  {:?}", delta_buffer );
+                  
+                }
+
+                break;
+                /*else {
+                    println!("Ya no hay futuras posiciones, delta final  {:?}", delta );
+                    println!("se elimina  {:?}", event_time );
+                    delta_buffer.0.remove(0);
+                    println!("delta_buffer  {:?}", delta_buffer );
+                    break;
+                    //let progress  = ((render_time - event_time) as f32 / (next_event_time - event_time) as f32 );
+                }*/
+               
+            }
+          
+        }
+
+        /*
+        delta_buffer.0.retain(|(delta, event_time)| {
+           
+            if(event_time < &mut render_time) {
+                println!("event_time  {:?} , current_client_time  {:?}", event_time, render_time );
+
+                let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
+                println!("unquantized_delta  {:?} ", unquantized_delta );
+                let last_known_position =   transform.translation +  unquantized_delta;
+    
+                transform.translation = transform.translation.lerp(new_position, progress);
+                println!("progress  {:?} ", progress );
+    
+                return false;
+            }
+
+              
+            let next_time = *event_time;
+
+            println!("diff client  {:?} ", next_time - current_client_time );
+            println!("diff prev state  {:?} ", next_time - prev_time );
+
+            let progress  = ((next_time - current_client_time) as f32 / (next_time - prev_time) as f32 );
+
+            let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
+            println!("unquantized_delta  {:?} ", unquantized_delta );
+            let new_position =   transform.translation +  unquantized_delta;
+
+            transform.translation = transform.translation.lerp(new_position, progress);
+            println!("progress  {:?} ", progress );
+
+
+            return false;
+            // Do stuff ...
+      
+        });*/
+
+
+        /*if let Some((next_delta, next_event_time)) = delta_buffer.0.get(1) {           
+
+            while delta_buffer.0.len() > 2 && &render_time > next_event_time {
+
+                if let Some((prev_delta, prev_event_time)) = delta_buffer.0.get(0) {                  
+                    println!("prev_time  {:?}, event_time  {:?}, future_time  {:?}", prev_event_time, render_time, next_event_time );
+                    let progress  = ((render_time - prev_event_time) as f32 / (next_event_time - prev_event_time) as f32 );
+                    println!("progress  {:?} ", progress );
+
+                    let prev_unquantized_delta = prev_delta.as_vec3().mul(TRANSLATION_PRECISION);
+                    let next_unquantized_delta = next_delta.as_vec3().mul(TRANSLATION_PRECISION);
+         
+                    let prev_position =  transform.translation + prev_unquantized_delta;
+                    let next_position =  prev_position + next_unquantized_delta;
+    
+                    transform.translation = prev_position.lerp(next_position, progress);
+
+                    delta_buffer.0.remove(0);
+
+                }
+
+              
+                
+            }
+           
+        }*/
+
+     
+
+    }
+
+}
+fn client_process_buffer(
+    mut query: Query<(&mut DeltaBuffer, &CreatedAtServerTime, &mut Transform)>, 
+    mut server_time_res: ResMut<ServerTime>,
+    client_time: Res<Time>,
+) {
+    for(mut delta_buffer, created_at, mut transform) in query.iter_mut() {
+
+
+        if(delta_buffer.0.len() == 0) {
+            continue;
+        }
+        
+
+        let time_between_frames_ms = (client_time.delta_seconds().mul(1000.)) as u128;
+        let initial_server_time =  server_time_res.0;      
+        let mut prev_time =  initial_server_time + client_time.elapsed().as_millis() - time_between_frames_ms  - INTERPLOATE_BUFFER;   
+        let mut prev_translation =  transform.translation;
+        let future_time = initial_server_time + client_time.elapsed().as_millis() - INTERPLOATE_BUFFER;
+        let mut future_translation =  transform.translation;
+        println!("prev_time  {:?}", prev_time);
+
+        let mut n = 0;
+        for (delta, event_time) in &delta_buffer.0 {
+
+            println!("prev_time  {:?}, event_time  {:?}, future_time  {:?}", prev_time, event_time, future_time );
+
+            let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
+            
+            // Si cae un frame en el pasado, solo queremos arreglar su delta
+            if(event_time < &prev_time) {
+                println!("Esta en el pasado!");
+                transform.translation =  transform.translation +  unquantized_delta;
+                n += 1; // Se elimina del buffer
+                break;
+            }
+
+           
+
+            if(event_time > &prev_time && event_time <= &future_time) {   
+              
+                let progress  = ((event_time - prev_time) as f32 / (future_time - prev_time) as f32 );
+                println!("progress  {:?} ", progress );
+                let new_position =   prev_translation + unquantized_delta;
+    
+                transform.translation = prev_translation.lerp(new_position, progress);
+
+                prev_translation = new_position;
+                prev_time = *event_time;
+                n += 1; // Se elimina del buffer
+                break;
+            }
+
+            /*
+            if(event_time < &mut current_client_time) {
+                println!("event_time  {:?} , current_client_time  {:?}", event_time, current_client_time );
+                transform.translation  =   transform.translation +  unquantized_delta;
+                prev_time = *event_time;
+                n += 1;
+                continue;
+            }
+
+            
+            if(prev_time == 0) {
+                continue;
+            }
+
+                 
+            let next_time = *event_time;
+            println!("prev_time  {:?}",prev_time );    
+            println!("delta_buffer  {:?}",delta_buffer );    
+            println!("diff client  {:?}, diff prev state  {:?}",( next_time - current_client_time), (next_time - prev_time) );    
+
+            let progress  = ((next_time - current_client_time) as f32 / (next_time - prev_time) as f32 );
+
+            if(!progress.is_nan()) {
+                println!("progress  {:?} ", progress );
+            
+                
+                println!("unquantized_delta  {:?} ", unquantized_delta );
+                let new_position =   transform.translation +  unquantized_delta;
+    
+                transform.translation = transform.translation.lerp(new_position, progress);
+            }
+
+         
+            
+            break; 
+            */
+        }
+        delta_buffer.0.drain(0..n);
+
+        /*delta_buffer.0.retain(|(delta, event_time)| {
+           
+                if(event_time < &mut current_client_time) {
+                    println!("event_time  {:?} , current_client_time  {:?}", event_time, current_client_time );
+                    prev_time = *event_time;
+                    return false;
+                }
+
+                  
+                let next_time = *event_time;
+
+                println!("diff client  {:?} ", next_time - current_client_time );
+                println!("diff prev state  {:?} ", next_time - prev_time );
+
+                let progress  = ((next_time - current_client_time) as f32 / (next_time - prev_time) as f32 );
+
+                let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
+                println!("unquantized_delta  {:?} ", unquantized_delta );
+                let new_position =   transform.translation +  unquantized_delta;
+
+                transform.translation = transform.translation.lerp(new_position, progress);
+                println!("progress  {:?} ", progress );
+
+
+                return false;
+                // Do stuff ...
+          
+        });*/
+
+        /* 
+        for (delta, event_time) in delta_buffer.0.iter_mut() {
+           
+            if(event_time < &mut current_client_time) {
+                println!("event_time  {:?} , current_client_time  {:?}", event_time, current_client_time );
+                prev_time = *event_time;
+                continue;
+            }
+         
+            let next_time = *event_time;
+
+            println!("diff client  {:?} ", next_time - current_client_time );
+            println!("diff prev state  {:?} ", next_time - prev_time );
+
+            let progress  = ((next_time - current_client_time) as f32 / (next_time - prev_time) as f32 );
+
+            let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
+            println!("unquantized_delta  {:?} ", unquantized_delta );
+            let new_position =   transform.translation +  unquantized_delta;
+
+            transform.translation = transform.translation.lerp(new_position, progress);
+            println!("progress  {:?} ", progress );
+            continue;
+            
+            
+           
+            //let unquantized_delta = delta.translation.as_vec3().mul(TRANSLATION_PRECISION);
+            //let new_position =   state.position +  unquantized_delta;
+
+        }*/
+
+        //println!("server_time_res  {:?} ", current_client_time );
+        //println!("delta_buffer  {:?} ", delta_buffer);
+
+
+          //t = (server_time2 - client_time) / (server_time2 - prev_time);
+        //client_position = (server_position1 + (server_position2-server_position1))* t;
+        // Where server_time2  is the smallest time greater than client_time  and prev_time is the greatest time less than client_time
+    }
+}
+
+fn client_move_entities(
+    mut query: Query<(&mut MyMovementState, &mut OldMovementState, &mut MovementDelta, &mut TargetPos)>, 
+   
+) {
+
+    for(mut state, mut old_state, mut delta, mut target_pos) in query.iter_mut() {
+        
+        if(delta.translation == IVec3 { x: 0, y: 0, z: 0} ) {           
+            continue;
+        }
+
+        /*if(delta.server_time <= state.server_time) {    
+            continue;
+        }*/
+
+        
+        
+        let unquantized_delta = delta.translation.as_vec3().mul(TRANSLATION_PRECISION);
+        let new_position =   state.position +  unquantized_delta;
+        old_state.position = state.position;
+        old_state.server_time = state.server_time;
+
+
+        if(new_position != Vec3::from(delta.real_translation)) {
+            
+            println!("starting_position  {} ", old_state.position);
+            println!("unquantized_delta.  {} ", unquantized_delta);
+            println!("new_position.  {} ", new_position);     
+            println!("real_translation.  {:?} ", delta.real_translation);
+        }
+        old_state.position = state.position;
+        old_state.server_time = state.server_time.clone();
+
+        target_pos.position = new_position;
+
+        // let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.01
+
+        //let new_translation = quantized_position + delta.translation;
+        state.position  =  new_position;
+        state.server_time = delta.server_time;
+        /*transform.translation +=  unquantized_delta;
+
+        transform.translation = transform.translation.lerp(new_position, delta.server_time;
+
+        */
+        delta.translation = IVec3 { x: 0, y: 0, z: 0};
+          
+        
+    }
+    
+    /*let target_translation = next_snapshot.translation;
+    let target_rot = next_snapshot.rotation;
+    let target_server_time = next_snapshot.server_time_millis;
+
+    if current_time > target_server_time {
+        current_snapshot = next_snapshot;
+
+        transform.translation = target_translation;
+        transform.rotation = target_rotation;
+
+        remove_next_snapshot_from_queue();
+        continue;
+    }
+
+    let progress = (current_time - current_snapshot.arrival_time) / (target_server_time - current_snapshot.arrival_time);
+
+    transform.translation = lerp(
+        current_snapshot.translation,
+        target_translation,
+        progress,
+    );
+    transform.rotation = lerp(
+        current_snapshot.rotation,
+        target_rot,
+        progress,
+    );
+
+    break;*/
+
+}
+
+
+fn client_lerp(
+    mut query: Query<(&mut MyMovementState, &mut OldMovementState, &mut Transform)>, 
+   
+) {
+
+    for(mut state, mut old_state, mut transform) in query.iter_mut() {
+
+        println!("old_state,server_time.  {} ", old_state.server_time);
+        println!("state,server_time.  {} ", state.server_time);
+
+        let time_passed =  Duration::from_millis((state.server_time - old_state.server_time) as u64);
+        let a = time_passed.as_secs_f32();
+
+        
+        // let a = fixed_time.overstep_fraction();
+        transform.translation = old_state.position.lerp(state.position, a);
+        
+
+    }
+    
+    /*let target_translation = next_snapshot.translation;
+    let target_rot = next_snapshot.rotation;
+    let target_server_time = next_snapshot.server_time_millis;
+
+    if current_time > target_server_time {
+        current_snapshot = next_snapshot;
+
+        transform.translation = target_translation;
+        transform.rotation = target_rotation;
+
+        remove_next_snapshot_from_queue();
+        continue;
+    }
+
+    let progress = (current_time - current_snapshot.arrival_time) / (target_server_time - current_snapshot.arrival_time);
+
+    transform.translation = lerp(
+        current_snapshot.translation,
+        target_translation,
+        progress,
+    );
+    transform.rotation = lerp(
+        current_snapshot.rotation,
+        target_rot,
+        progress,
+    );
+
+    break;*/
+
+}
 
 
 fn client_sync_entities(
@@ -465,7 +997,7 @@ fn client_sync_entities(
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
         let server_message = bincode::deserialize(&message).unwrap();
         match server_message {
-            ServerMessages::PlayerCreate { id, translation, entity } => {
+            ServerMessages::PlayerCreate { id, translation, entity , server_time} => {
                 println!("Player {} connected.", id);                     
            
                 if client_id == id.raw() {
@@ -492,9 +1024,12 @@ fn client_sync_entities(
                         .insert(ControlledPlayer) 
                         .insert(Billboard)
                         .insert(Velocity::default())
+                        .insert(Rotation(0) )
                         .insert(NotShadowCaster)
+                        .insert(CreatedAtServerTime(server_time))
                         .insert(TargetPos { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
-                        .insert(OldMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
+                        .insert(MyMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time})
+                        .insert(OldMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time})
                         .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
 
                     network_mapping.0.insert(entity, client_entity.id());
@@ -550,7 +1085,8 @@ fn client_sync_entities(
 
                 monster_entity
                     .insert(Billboard)
-                    .insert(Velocity::default());
+                    .insert(Velocity::default())
+                    .insert(Rotation(0));
     
                 network_mapping.0.insert(networked_entities.entities[i], monster_entity.id());
              
