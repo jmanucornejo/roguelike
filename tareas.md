@@ -33,3 +33,4 @@ Networking
 [X] Movimiento con click
 [ ] Optimizar paquetes // https://thegrimsey.net/2022/10/15/Bevy-Part-Two.html
 [ ] Que hacer si el cliente se aleja demasiado del pathing real
+[ ] Sync clock client/server

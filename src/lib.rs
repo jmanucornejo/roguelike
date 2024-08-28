@@ -22,7 +22,7 @@ pub enum AppState {
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
-pub const INTERPLOATE_BUFFER: u128 = 200;
+pub const INTERPLOATE_BUFFER: u128 = 150;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -41,8 +41,14 @@ pub enum ServerMessage {
 pub struct Velocity(pub Vec3);
 
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 pub struct PrevState {
+    pub translation: Vec3,
+    pub rotation: Rotation
+}
+
+#[derive(Component, Debug)]
+pub struct TargetState {
     pub translation: Vec3,
     pub rotation: Rotation
 }
