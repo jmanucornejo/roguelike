@@ -10,7 +10,7 @@ use bevy_renet::{renet::*, transport::NetcodeClientPlugin};
 use bevy_renet::*;
 use bevy_renet::renet::transport::NetcodeClientTransport;
 use std::{
-    collections::HashMap, net::{SocketAddr, UdpSocket}, time::{Duration, SystemTime}
+    collections::{HashMap, VecDeque}, net::{SocketAddr, UdpSocket}, time::{Duration, SystemTime}
 };
 use bevy_asset_loader::prelude::*;
 
@@ -71,7 +71,7 @@ struct Target;
 
 
 #[derive(Component, Debug)]
-struct DeltaBuffer(Vec<(IVec3, u128)>);
+struct DeltaBuffer(VecDeque<(IVec3, u128)>);
 
 #[derive(Component, Debug)]
 struct 
@@ -358,7 +358,7 @@ fn client_sync_players(
                         .insert(Velocity::default())
                         .insert(Rotation(0) )
                         .insert(NotShadowCaster)
-                        .insert(DeltaBuffer(Vec::new()))
+                        .insert(DeltaBuffer(VecDeque::new()))
                         .insert(PrevState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })  
                         .insert(TargetState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })
                         .insert(CreatedAtServerTime(server_time))
@@ -470,7 +470,7 @@ fn client_sync_players(
                         };       
                         //let unquantized_delta = quantized_delta.as_vec3().mul(TRANSLATION_PRECISION);
 
-                        delta_buffer.0.push((quantized_delta, server_time));             
+                        delta_buffer.0.push_back((quantized_delta, server_time));             
 
                         /*let unquantized_delta = quantized_delta.as_vec3().mul(TRANSLATION_PRECISION);
                         state.position =   state.position +  unquantized_delta;
@@ -540,31 +540,12 @@ fn interpolation_delta(
         let mut render_time =  initial_server_time + client_time.elapsed().as_millis()  - INTERPLOATE_BUFFER;   
 
         // Creo q esto podria eliminarse para optimizar
-        delta_buffer.0.sort_by(|a, b| a.1.cmp(&b.1));
-
-          
-      
-        /*if delta_buffer.0.get(1).is_none()  {
-            
-            if let Some((delta, event_time)) = delta_buffer.0.get(0) {  
-
-                if(&render_time > event_time) { 
-                    continue;
-                }
-                println!("Posición actual  {:?}, Posición anterior {:?}", transform.translation, prev_state.translation );
-                let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
-            
-                transform.translation =  prev_state.translation + unquantized_delta;
-                delta_buffer.0.remove(0);
-            }
-        
-        }*/
-   
+        //delta_buffer.0.sort_by(|a, b| a.1.cmp(&b.1));
       
 
         while delta_buffer.0.len() > 0 {
 
-            if let Some((delta, event_time)) = delta_buffer.0.get(0) {  
+            if let Some((delta, event_time)) = delta_buffer.0.front() {  
               
 
                 if(&render_time < event_time) {
@@ -581,6 +562,7 @@ fn interpolation_delta(
                     let next_unquantized_delta = next_delta.as_vec3().mul(TRANSLATION_PRECISION);
                     
                     // En caso ha llegado en desorden el evento.
+                    // Evento llega con tiempo anterior al actual.
                     if(event_time > next_event_time) {
 
                       
@@ -615,40 +597,18 @@ fn interpolation_delta(
                     /*if delta_buffer.0.get(2).is_none()  {
                         delta_buffer.0.remove(1);
                     }*/
-                    delta_buffer.0.remove(0);
+                    delta_buffer.0.pop_front();
                     //println!("delta_buffer  {:?}", delta_buffer );
                    
                 }
-                /*else {
-                  
-                    transform.translation = target_state.translation;
-                    println!("Final position  {:?} ", transform.translation );
-                    delta_buffer.0.remove(0);
-                }*/
                 break;
-                /*else {
-                    println!("Posición actual  {:?}, Posición anterior {:?}", transform.translation, prev_state.translation );
-                    break;
-
-                    // No aplicar en caso ya llego al último paso o acaba de empezar
-                    /*if(transform.translation != prev_state.translation) {
-                        transform.translation = prev_state.translation + delta.as_vec3().mul(TRANSLATION_PRECISION);
-                        println!("Posición actual  {:?}, Posición anterior {:?}", transform.translation, prev_state.translation );
-                        prev_state.translation =  transform.translation;
-                        delta_buffer.0.remove(0);
-                        // println!("se elimina  {:?}", event_time );
-                    }*/
-                  
-                
-                    //let progress  = ((render_time - event_time) as f32 / (next_event_time - event_time) as f32 );
-                }
-                break;*/
+              
             
             }
           
         }
 
-        if let Some((_delta, event_time)) = delta_buffer.0.get(0) {  
+        if let Some((_delta, event_time)) = delta_buffer.0.front() {  
             // Se le da un par de frames al buffer para limpiarse completamente.
             let next_frame = render_time - client_time.delta().as_millis() - client_time.delta().as_millis();
             if(event_time < &next_frame) {
