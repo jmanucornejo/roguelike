@@ -47,6 +47,10 @@ pub struct PrevState {
     pub rotation: Rotation
 }
 
+#[derive(Debug, Default, Component)]
+pub struct LineOfSight(pub Vec<Entity>);
+
+
 #[derive(Component, Debug)]
 pub struct TargetState {
     pub translation: Vec3,

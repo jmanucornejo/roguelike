@@ -13,7 +13,7 @@ use local_ip_address::local_ip;
 use monsters::*;
 use pathing::*;
 use roguelike::*;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::{
     net::{SocketAddr, UdpSocket},
     time::SystemTime,
@@ -80,6 +80,7 @@ fn main() {
                 //server_network_sync_player_out,    
                 network_send_delta_position_system,      
                 click_move_players_system,
+                line_of_sight
                 //monster_test
             )
         )
@@ -224,6 +225,7 @@ fn server_events(
                     .insert(NearestNeighbourComponent)
                     .insert(TargetPos { position: transform.translation})
                     .insert(Player { id: *client_id })
+                    .insert(LineOfSight::default())
                  
                     .id();
 
@@ -500,20 +502,19 @@ fn server_network_sync_player_out(
 
 pub fn network_send_delta_position_system(
     mut server: ResMut<RenetServer>, 
-    players: Query<(Entity, &Player, &Transform)>,
-    mut query: Query<(Entity, &Transform, &Rotation,  &mut PrevState), Changed<Transform>>,
-    treeaccess: Res<NNTree>,
+    players: Query<(&Player, &LineOfSight)>,
+    mut query: Query<(Entity, &Transform, &Rotation,  &mut PrevState,), Changed<Transform>>,
     time: Res<Time>,
 ) {
-    for (player_entity, player, transform) in players.iter() {
+    for (player, line_of_sight) in players.iter() {
       
-        for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {           
+        for entity in line_of_sight.0.iter() {           
 
-            if let Ok( (entity, transform, rotation, mut prev_state)) = query.get_mut(entity.expect("No entity")) {
+            if let Ok( (entity, transform, rotation, mut prev_state)) = query.get_mut(*entity) {
                 
                 let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
                 let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
-                println!("player.id {:?} . changed entity =   {:?}", player.id, entity);   
+                //println!("player.id {:?} . changed entity =   {:?}", player.id, entity);   
                 if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO {                                
                     
                     let message= ServerMessages::MoveDelta {
@@ -528,7 +529,7 @@ pub fn network_send_delta_position_system(
                     let sync_message = bincode::serialize(&message).unwrap();
                     // Send message to only one client
 
-                    println!("Sent message to client_id {:?} .", player.id);   
+                    //println!("Sent message to client_id {:?} .", player.id);   
                     server.send_message(player.id, ServerChannel::ServerMessages, sync_message);                    
        
                 }  
@@ -542,3 +543,40 @@ pub fn network_send_delta_position_system(
         prev_state.rotation = rotation.clone();
     }
 }
+
+
+
+
+pub fn line_of_sight(
+    mut players: Query<(&Transform, &mut LineOfSight), With<Player>>,
+    treeaccess: Res<NNTree>
+) {
+    for (transform, mut line_of_sight) in players.iter_mut() {
+
+        let within_distance = treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT);
+
+        let entities_within_distance: Vec<Entity> = within_distance.iter().filter_map(|z| z.1).collect();
+
+        if(entities_within_distance == line_of_sight.0) {
+           // info!("No ha cambiado line of sight {:?}", entities_within_distance);
+            continue;
+        }      
+
+
+        let old_set: HashSet<Entity> = line_of_sight.0.iter().cloned().collect();
+        let new_set: HashSet<Entity> = entities_within_distance.iter().cloned().collect();
+
+        let added: Vec<Entity> = new_set.difference(&old_set).cloned().collect();
+        let removed: Vec<Entity> = old_set.difference(&new_set).cloned().collect();
+
+        println!("Added: {:?}", added);     // Output: Added: ["date"]
+        println!("Removed: {:?}", removed);
+
+
+        line_of_sight.0 = entities_within_distance;              
+      
+    }    
+
+}
+
+
