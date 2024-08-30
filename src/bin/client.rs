@@ -453,49 +453,25 @@ fn client_sync_players(
                 });*/
                 network_mapping.0.insert(entity, monster_entity.id());
             },
-            ServerMessages::MoveDelta { entity, x, y,z, rotation, server_time , real_translation} => {
+            ServerMessages::MoveDelta { entity, x, y,z, rotation, server_time} => {
                 //println!("Message received  {} ", server_time);
-
+                println!("server_entity {} ", entity);
+                println!("network_mapping {:?} ", network_mapping.0);
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
-                  
-                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut delta_buffer)) = entities.get_mut(*client_entity) {
-                      
 
-                     
+                    println!("client_entity {} ", client_entity);
+                  
+                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut delta_buffer)) = entities.get_mut(*client_entity) {                    
 
                         let quantized_delta = IVec3 { 
                             x: x,
                             y: y,
                             z: z
                         };       
-                        //let unquantized_delta = quantized_delta.as_vec3().mul(TRANSLATION_PRECISION);
-
                         delta_buffer.0.push_back((quantized_delta, server_time));             
 
-                        /*let unquantized_delta = quantized_delta.as_vec3().mul(TRANSLATION_PRECISION);
-                        state.position =   state.position +  unquantized_delta;
-
-                        target_pos.position = state.position;*/
                     }
-                }
-              
-                /*if let Some(entity) = network_mapping.0.get(&entity) {
-
-                    let movement_delta = MovementDelta {
-                        translation: IVec3 { 
-                            x: x,
-                            y: y,
-                            z: z
-                        },
-                        rotation: rotation,
-                        server_time,
-                        real_translation
-                    };
-                    println!("Se inserta info   {:?} ", movement_delta.translation);
-                    commands.entity(*entity).insert(movement_delta);
-                }*/
-
-               
+                }               
             }
         }
     }
@@ -567,7 +543,7 @@ fn interpolation_delta(
 
                       
                         // Se ajusta nomás el delta del evento perdido directo a la posición actual.
-                      
+                        let prev_position =  prev_state.translation + next_unquantized_delta;
                         transform.translation = transform.translation + next_unquantized_delta;
                         delta_buffer.0.remove(1);
                         break;
@@ -1384,111 +1360,4 @@ fn interpolate_system(
     }
 }
 
-/*fn transform_movement_interpolate(
-    fixed_time: Res<Time<Fixed>>,
-    mut q_movement: Query<(
-        &mut Transform, &TargetPos, &OldMovementState
-    )>,
-) {
-    for (mut xf, state, old_state) in &mut q_movement {
-        let a = fixed_time.overstep_fraction();
-        xf.translation = old_state.position.lerp(state.position, a);
-    }
-}*/
 
-
-
-fn click_move_players_system(
-    mut query: Query<(Entity, &mut Velocity, &PlayerCommand, &mut Transform)>,
-    map: Res<Map>,
-    mut commands: Commands
-) {
-
-    
-    for (entity,mut velocity, command, mut transform) in query.iter_mut() {
-        match command {
-            PlayerCommand::Move { destination_at } => {  
-                info!("Command   {:?}!", command);
-                let start: Pos = Pos(
-                    transform.translation.x.round() as i32, 
-                    transform.translation.z.round() as i32
-                );
-                let goal: Pos = Pos(
-                    destination_at.x as i32, 
-                    destination_at.z as i32
-                );    
-
-            
-                if((destination_at.x != transform.translation.x || destination_at.z != transform.translation.z) && !map.blocked_paths.contains(&goal)) {                     
-    
-                    info!("Start   {:?}!  Goal  {:?}!", start,goal);
-
-                    //let succesors = get_succesors(&start, &map);                        
-                    let astar_result = astar(
-                        &start,
-                        |p|  get_astar_successors(p, &map),
-                        |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
-                        |p| *p==goal);
-
-
-                    info!("*Star Result {:?}! ",astar_result);    
-
-               
-                    if let Some(result) = astar_result{
-                        let steps_vec = result.0;
-                        let steps_left =  result.1;
-                        let mut index = 1;
-                        if(steps_left == 0) {
-                            index = 0;
-                        }
-                  
-  
-                        if let Some(final_pos) = steps_vec.get(index) {
-                     
-                            let &Pos(x, z) = final_pos;
-
-                            //info!("Final Pos: {:?}!", final_pos);    
-                            
-                            //info!("*Star Result Next step  x: {:?}! z: {:?}!", x, z);    
-                            info!("Translation: {:?}!", transform.translation);   
-                            let distance_x = x as f32 - transform.translation.x;
-                            //info!("*Star Result distance_x  x: {:?}!", distance_x);   
-
-                            if distance_x.abs() < 0.2 && (steps_left == 1 || steps_left == 0)  {
-                                velocity.0.x = 0.0;
-                                transform.translation.x = destination_at.x;
-                            }        
-                            else if distance_x > 0.0 {
-                                velocity.0.x = PLAYER_MOVE_SPEED;
-                            }
-                            else if  distance_x < 0.0 {
-                                velocity.0.x = -PLAYER_MOVE_SPEED;
-                            }
-                        
-                            let distance_z = z as f32 - transform.translation.z;         
-
-                            if  distance_z.abs() < 0.2  && (steps_left == 1 || steps_left == 0)  {
-                                velocity.0.z = 0.0; 
-                                transform.translation.z = destination_at.z;
-                            }                    
-                            else if distance_z > 0.0 {
-                                velocity.0.z = PLAYER_MOVE_SPEED;
-                            }
-                            else if  distance_z < 0.0 {
-                                velocity.0.z = -PLAYER_MOVE_SPEED;
-                            }                            
-                       }
-                      
-                    }      
-                  
-                }
-                else {
-                    commands.entity(entity).remove::<PlayerCommand>();
-                }  
-            },
-            _  =>{}
-        }
-     
-
-    }
-}

@@ -409,46 +409,6 @@ fn click_move_players_system(
                     });
              
                 }
-
-                /*if((destination_at.x != transform.translation.x || destination_at.z != transform.translation.z) && !map.blocked_paths.contains(&goal)) {                     
-    
-                    // info!("Start   {:?}!  Goal  {:?}!", start,goal);
-
-                    //let succesors = get_succesors(&start, &map);                        
-                    let astar_result = astar(
-                        &start,
-                        |p|  get_astar_successors(p, &map),
-                        |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
-                        |p| *p==goal);
-
-
-                    //info!("*Star Result {:?}! ",astar_result);    
-
-               
-                    if let Some(result) = astar_result{
-                        let steps_vec = result.0;
-                        let steps_left =  result.1;
-                        let mut index = 1;
-                        if(steps_left == 0) {
-                            index = 0;
-                        }
-                  
-  
-                        if let Some(final_pos) = steps_vec.get(index) {
-                     
-                            let &Pos(x, z) = final_pos;
-
-                            //info!("Final Pos: {:?}!", final_pos);    
-                            // Se cambia el punto objetivo.
-                            commands.entity(entity).insert(TargetPos {
-                                position: Vec3 { x: x as f32, y: 2.0, z: z as f32},
-                            });
-                     
-                       }
-                      
-                    }        
-                  
-                }*/
             },
             _  =>{}
         }
@@ -540,27 +500,21 @@ fn server_network_sync_player_out(
 
 pub fn network_send_delta_position_system(
     mut server: ResMut<RenetServer>, 
-    players: Query<(&Player, &Transform)>,
+    players: Query<(Entity, &Player, &Transform)>,
     mut query: Query<(Entity, &Transform, &Rotation,  &mut PrevState), Changed<Transform>>,
     treeaccess: Res<NNTree>,
     time: Res<Time>,
 ) {
-    for (player, transform) in players.iter() {
+    for (player_entity, player, transform) in players.iter() {
+      
+        for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {           
 
-        for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
-
-
-            if let Ok( (entity, mut transform, rotation, mut prev_state)) = query.get_mut(entity.expect("No entity")) {
+            if let Ok( (entity, transform, rotation, mut prev_state)) = query.get_mut(entity.expect("No entity")) {
                 
-                let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.01
-
+                let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
                 let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
-
-                if prev_state.rotation != *rotation || delta_translation != IVec3::ZERO {
-                    println!("message_sent {:?} .", time.elapsed().as_millis());
-                    println!("prev_translation {:?} .", prev_state.translation);                   
-                    println!("delta_translation {:?} .", delta_translation);
-                    println!("real_translation {:?} .", transform.translation);
+                println!("player.id {:?} . changed entity =   {:?}", player.id, entity);   
+                if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO {                                
                     
                     let message= ServerMessages::MoveDelta {
                         entity,
@@ -568,22 +522,23 @@ pub fn network_send_delta_position_system(
                         y: delta_translation.y,
                         z: delta_translation.z,
                         rotation: rotation.clone(),
-                        server_time: time.elapsed().as_millis(),
-                        real_translation: transform.translation.into(),
+                        server_time: time.elapsed().as_millis()
                     };
 
                     let sync_message = bincode::serialize(&message).unwrap();
                     // Send message to only one client
+
+                    println!("Sent message to client_id {:?} .", player.id);   
                     server.send_message(player.id, ServerChannel::ServerMessages, sync_message);                    
        
-                }
-    
-                prev_state.translation = transform.translation;
-                prev_state.rotation = rotation.clone();
-
-
-            }
-         
+                }  
+            }         
         }
+    }
+    
+    // posteriormente, se actualiza las ubicaciones antiguas de las entidades.
+    for (_entity, transform, rotation, mut prev_state) in query.iter_mut() {
+        prev_state.translation = transform.translation;
+        prev_state.rotation = rotation.clone();
     }
 }

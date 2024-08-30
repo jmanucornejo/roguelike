@@ -145,7 +145,7 @@ pub enum ServerMessages {
         z: i32,
         rotation: Rotation,
         server_time: u128,
-        real_translation: [f32; 3],
+        //real_translation: [f32; 3],
     },
     SpawnProjectile {
         entity: Entity,
