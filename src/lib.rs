@@ -22,11 +22,13 @@ pub enum AppState {
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
-pub const INTERPLOATE_BUFFER: u128 = 150;
+pub const INTERPLOATE_BUFFER: u128 = 350;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Ping,
+    SyncTimeRequest  {
+        client_time: u128
+    },
 }
 
 
@@ -34,7 +36,10 @@ pub enum ClientMessage {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
-    Pong,
+    SyncTimeResponse  {
+        client_time: u128,
+        server_time: u128
+    }
 }
 
 #[derive(Debug, Default, Component)]
@@ -95,12 +100,12 @@ pub enum PlayerCommand {
 pub enum ClientChannel {
     Input,
     Command,
-    Ping
+    SyncTimeRequest
 }
 pub enum ServerChannel {
     ServerMessages,
     NetworkedEntities,
-    Pong
+    SyncTimeResponse
 }
 
 
@@ -179,7 +184,7 @@ impl From<ClientChannel> for u8 {
         match channel_id {
             ClientChannel::Command => 0,
             ClientChannel::Input => 1,
-            ClientChannel::Ping => 2,
+            ClientChannel::SyncTimeRequest => 2,
         }
     }
 }
@@ -202,7 +207,7 @@ impl ClientChannel {
                 },
             },
             ChannelConfig {
-                channel_id: Self::Ping.into(),
+                channel_id: Self::SyncTimeRequest.into(),
                 max_memory_usage_bytes: 5 * 1024 * 1024,
                 send_type: SendType::Unreliable
             },
@@ -215,7 +220,7 @@ impl From<ServerChannel> for u8 {
         match channel_id {
             ServerChannel::NetworkedEntities => 0,
             ServerChannel::ServerMessages => 1,
-            ServerChannel::Pong => 2,
+            ServerChannel::SyncTimeResponse => 2,
         }
     }
 }
@@ -236,7 +241,7 @@ impl ServerChannel {
                 },
             },
             ChannelConfig {
-                channel_id: Self::Pong.into(),
+                channel_id: Self::SyncTimeResponse.into(),
                 max_memory_usage_bytes: 10 * 1024 * 1024,
                 send_type: SendType::Unreliable
             },
