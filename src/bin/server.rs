@@ -1,6 +1,7 @@
 
 
 use bevy::log::{LogPlugin};
+use bevy_obj::ObjPlugin;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
@@ -44,6 +45,8 @@ fn main() {
         )
         .add_plugins(PathingPlugin)
         .add_plugins(AutomaticUpdate::<NearestNeighbourComponent>::new())
+        .add_plugins(ObjPlugin) 
+        .add_plugins(MaterialPlugin::<WaterMaterial>::default())
        // .add_plugins(MinimalPlugins)
         //.add_plugins(LogPlugin::default())
         .add_systems(
@@ -65,7 +68,7 @@ fn main() {
         .insert_resource(create_renet_server())
         .add_plugins(NetcodeServerPlugin)
         .insert_resource(create_renet_transport())
-        .add_systems(Update, sync_client_time)
+        .add_systems(FixedUpdate, sync_client_time)
         .add_systems(
             Update, 
             (
@@ -351,7 +354,7 @@ fn sync_client_time(
     time: Res<Time>,
 ) {
     //let reliable_channel_id = ReliableChannelConfig::default().channel_id;
-
+    //println!("Time  {:?} ", time.elapsed().as_millis() );
     // Receive message from channel
     for client_id in server.clients_id() {
         // The enum DefaultChannel describe the channels used by the default configuration
@@ -359,11 +362,15 @@ fn sync_client_time(
             let client_message: ClientMessage = bincode::deserialize(&message).unwrap();
             match client_message {
                 ClientMessage::SyncTimeRequest { client_time } => {
-                    info!("Got sync time request from {}!", client_id);
+                    //info!("Got sync time request from {}!", client_id);
                     let sync_time_response = bincode::serialize(&ServerMessage::SyncTimeResponse { client_time: client_time, server_time: time.elapsed().as_millis() }).unwrap();
                     server.send_message(client_id, DefaultChannel::ReliableOrdered, sync_time_response);
                 },
-                
+                ClientMessage::LatencyRequest { client_time } => {
+                    //info!("Got Latency request from {}!", time.elapsed().as_millis(), client_id);
+                    let sync_time_response = bincode::serialize(&ServerMessage::LatencyResponse { client_time: client_time }).unwrap();
+                    server.send_message(client_id, DefaultChannel::ReliableOrdered, sync_time_response);
+                },
             }
         }
     }
@@ -515,9 +522,9 @@ pub fn network_send_delta_position_system(
                 
                 let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
                 let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
-                //println!("player.id {:?} . changed entity =   {:?}", player.id, entity);   
+             
                 if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO {                                
-                    
+                    println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                     let message= ServerMessages::MoveDelta {
                         entity,
                         x: delta_translation.x,

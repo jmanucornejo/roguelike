@@ -1,8 +1,10 @@
 
 use bevy_sprite3d::*;
+use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
 use pathfinding::prelude::astar;
 use pathing::*;
+use interpolation::*;
 use roguelike::*;
 use bevy::{asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
 pub use bevy_renet::renet::transport::ClientAuthentication;
@@ -52,7 +54,15 @@ struct NetworkMapping(HashMap<Entity, Entity>);
 struct ServerTime(u128);
 
 #[derive(Default, Resource)]
+struct Latency(u16);
+
+#[derive(Default, Resource)]
+struct ClockOffset(u128);
+
+#[derive(Default, Resource)]
 struct SyncData {
+    timer: Timer,
+    samples: Vec<u16>,
     total_rtt: u128,
     sync_attempts: usize,
     max_attempts: usize,
@@ -75,10 +85,6 @@ struct CurrentClientId(u64);
 
 #[derive(Component)]
 struct Target;
-
-
-#[derive(Component, Debug)]
-struct DeltaBuffer(VecDeque<(IVec3, u128)>);
 
 
 #[derive(Component, Deref, DerefMut)]
@@ -150,7 +156,8 @@ fn main() {
         .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
         )
-        .add_plugins(PanOrbitCameraPlugin)
+        .add_plugins(ObjPlugin) 
+        .add_plugins((PanOrbitCameraPlugin, MaterialPlugin::<WaterMaterial>::default()))
         // .add_plugins(LookTransformPlugin)
         
         //.add_plugins(DefaultPlugins)
@@ -160,7 +167,11 @@ fn main() {
         .insert_resource(Map::default())
         .insert_resource(NetworkMapping::default())
         .insert_resource(ServerTime::default())
+        .insert_resource(ClockOffset::default())
+        .insert_resource(Latency::default())
         .insert_resource(SyncData  {
+            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+            samples: Vec::new(),
             total_rtt: 0,
             sync_attempts: 0,
             max_attempts: 10, // Number of sync requests to send
@@ -168,12 +179,13 @@ fn main() {
         .add_event::<PlayerCommand>()
         .add_plugins(NetcodeClientPlugin)   
       
-        .add_systems(Startup, (setup_level,setup_camera))
+        .add_systems(Startup, (setup_level,setup_camera,move_water))
         .add_plugins(Sprite3dPlugin)
         // .add_plugins(PathingPlugin)
-        .add_systems(OnEnter(AppState::InGame), ((setup_player, setup_target)))
+        .add_systems(OnEnter(AppState::InGame), ((setup_player, setup_target, setup_server_time_and_latency)))
         .add_systems(Update, 
             (
+               
                 update_cursor_system.run_if(in_state(AppState::InGame)),
                 player_input.run_if(in_state(AppState::InGame)),             
                 //camera_zoom.run_if(in_state(AppState::InGame)),
@@ -187,14 +199,15 @@ fn main() {
             )
         )  
         .add_systems(
-            FixedUpdate, (
+            FixedUpdate, (        
                 client_sync_time_system,
                 // client_move_entities.run_if(in_state(AppState::InGame)),
                 client_sync_players.run_if(in_state(AppState::InGame)).after(client_sync_time_system),
                 // client_sync_entities.run_if(in_state(AppState::InGame)),
                 //click_move_players_system.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
-                interpolation_delta.run_if(in_state(AppState::InGame)).after(client_sync_players),
+                // interpolation_delta.run_if(in_state(AppState::InGame)).after(client_sync_players),
+                interpolate_positions_with_deltas.run_if(in_state(AppState::InGame)).after(client_sync_players),
 
                 // sprite_movement.run_if(in_state(AppState::InGame))
             )
@@ -311,7 +324,7 @@ fn client_sync_players(
     acolyte            : Res<AcolyteAssets>,
     pig_assets            : Res<PigAssets>,
     mut sprite_params : Sprite3dParams,       
-    mut entities: Query<(Entity, &Transform, &mut MyMovementState, &mut OldMovementState, &mut TargetPos, &mut DeltaBuffer)>, 
+    mut entities: Query<(Entity, &Transform, &mut MyMovementState, &mut OldMovementState, &mut TargetPos, &mut DeltaBuffer, &mut PositionHistory)>, 
     mut server_time_res: ResMut<ServerTime>,
 ) {
     let client_id = client_id.0;
@@ -347,6 +360,7 @@ fn client_sync_players(
                         .insert(Rotation(0) )
                         .insert(NotShadowCaster)
                         .insert(DeltaBuffer(VecDeque::new()))
+                        .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
                         .insert(PrevState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })  
                         .insert(TargetState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })
                         .insert(TargetPos { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
@@ -448,13 +462,14 @@ fn client_sync_players(
 
                     //println!("client_entity {} ", client_entity);
                   
-                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut delta_buffer)) = entities.get_mut(*client_entity) {                    
+                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut delta_buffer, mut position_history)) = entities.get_mut(*client_entity) {                    
 
                         let quantized_delta = IVec3 { 
                             x: x,
                             y: y,
                             z: z
                         };       
+                        position_history.add_delta(quantized_delta,server_time);
                         delta_buffer.0.push_back((quantized_delta, server_time));             
 
                     }
@@ -491,29 +506,46 @@ fn client_sync_players(
 }
 
 
+
+fn setup_server_time_and_latency(
+    time: Res<Time>,
+    mut client: ResMut<RenetClient>,
+) {
+
+    let sync_request_message = bincode::serialize(&ClientMessage::SyncTimeRequest { client_time: time.elapsed().as_millis() }).unwrap();
+
+    client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
+    //client.send_message(reliable_channel_id, ping_message);
+    info!("Sent sync time request!");
+}
+
+
 fn client_sync_time_system(
     time: Res<Time>,
     mut sync_data: ResMut<SyncData>,
     mut client: ResMut<RenetClient>,
     mut server_time_res: ResMut<ServerTime>,
+    mut latency: ResMut<Latency>,
+    mut clock_offset: ResMut<ClockOffset>,
 ) {
-    if sync_data.sync_attempts < sync_data.max_attempts {
 
-        let sync_request_message = bincode::serialize(&ClientMessage::SyncTimeRequest { client_time: time.elapsed().as_millis() }).unwrap();
+    sync_data.timer.tick(time.delta());
 
-        client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
-        //client.send_message(reliable_channel_id, ping_message);
-        info!("Sent sync time request!");
-      
+    if sync_data.timer.finished() {
+       // let sync_request_message = bincode::serialize(&ClientMessage::LatencyRequest { client_time: time.elapsed().as_millis() }).unwrap();
+        //client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
     }
 
     while let Some(message) = client.receive_message(ClientChannel::SyncTimeRequest) {
         let server_message = bincode::deserialize(&message).unwrap();
         match server_message {
-            ServerMessage::SyncTimeResponse { client_time, server_time } => {
-               
+            ServerMessage::SyncTimeResponse { client_time, server_time } => {                      
 
                 let rtt = time.elapsed().as_millis() - client_time;
+                let one_way_latency = rtt / 2;
+                server_time_res.0 = server_time + one_way_latency;
+                latency.0 = one_way_latency as u16;
+                info!("server_time_res {:?}, latency  {:?}", server_time_res.0, one_way_latency);
 
                 sync_data.total_rtt += rtt;
                 sync_data.sync_attempts += 1;
@@ -523,10 +555,11 @@ fn client_sync_time_system(
                     let one_way_latency = avg_rtt / 2;
                     //latency.0 = one_way_latency;
 
-                    let estimated_server_time = server_time + one_way_latency;
+                    server_time_res.0 = server_time + one_way_latency;
+                    latency.0 = one_way_latency as u16;
+                    clock_offset.0 = server_time_res.0 - time.elapsed().as_millis();
                     info!("one_way_latency {:?}",one_way_latency);
-                    info!("server_time  {} estimated_server_time {}",server_time, estimated_server_time);
-                    server_time_res.0 = estimated_server_time;
+                   
                     // Adjust client clock
                     //client_time.0 = estimated_server_time;
 
@@ -534,56 +567,144 @@ fn client_sync_time_system(
                     // sync_data.pending_requests = 0;
                     // sync_data.total_rtt = 0;
                     // sync_data.sync_attempts = 0;
-                } /*else {
-                    sync_data.pending_requests += 1;
-                }*/
+                } 
+                else {
+                    let sync_request_message = bincode::serialize(&ClientMessage::SyncTimeRequest { client_time: time.elapsed().as_millis() }).unwrap();
+                    client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
+
+                }
+              
+            },
+            ServerMessage::LatencyResponse { client_time } => {           
+
+                //info!("client_time{:?}",client_time);
+                let rtt = (time.elapsed().as_millis() - client_time) as u16;
+
+                sync_data.samples.push(rtt);
+
+                if(sync_data.samples.len() == 9) {
+
+                    sync_data.samples.sort();
+
+                    //let mid_point = sync_data.samples.get(4);
+
+                    let median = sync_data.samples[4];
+                    info!("median {:?}",median);
+       
+                    sync_data.samples.retain(|sample|  if *sample > median.mul(2) && *sample > 20 {  
+                        false
+                    }
+                    else {
+                        true
+                    });
+                    info!("median {:?}",sync_data.samples);
+       
+                    latency.0 = sync_data.samples.iter().sum::<u16 >() / sync_data.samples.len() as u16 ;
+                    info!("average_latency {:?}",latency.0);
+
+                    sync_data.samples.clear();
+
+                }
+               
+                /* 
+                sync_data.total_rtt += rtt;
+                sync_data.sync_attempts += 1;
+
+                if sync_data.sync_attempts >= sync_data.max_attempts {
+                    let avg_rtt = sync_data.total_rtt / sync_data.sync_attempts as u128;
+                    let one_way_latency = avg_rtt / 2;
+                    //latency.0 = one_way_latency;
+
+                 
+                    info!("one_way_latency {:?}",one_way_latency);
+                   
+                    // Adjust client clock
+                    //client_time.0 = estimated_server_time;
+
+                    // Reset sync data for next sync cycle
+                    // sync_data.pending_requests = 0;
+                    // sync_data.total_rtt = 0;
+                    // sync_data.sync_attempts = 0;
+                } */
             }
         }
     }
 }
 
 
+
+fn interpolate_positions_with_deltas(
+    server_time_res: Res<ServerTime>,
+    client_time: Res<Time>,
+    latency: Res<Latency>,
+    clock_offset: Res<ClockOffset>,
+    mut query: Query<(&mut PositionHistory, &mut Transform)>,
+) {
+
+    if( server_time_res.0 == 0 || client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
+            println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
+         return;
+     }
+
+    let target_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
+
+
+    for (mut history, mut transform) in query.iter_mut() {
+      
+        if let Some(interpolated_position) = history.interpolate_delta_positions(target_time) {
+            println!("Se cambia el transform {:?} ", interpolated_position);
+            transform.translation = interpolated_position;
+            continue;
+        }
+    }
+}
+
 fn interpolation_delta(
     mut query: Query<(&mut DeltaBuffer, &mut PrevState,  &mut TargetState, &mut Transform)>, 
     mut server_time_res: ResMut<ServerTime>,
     client_time: Res<Time>,
+    latency: Res<Latency>,
+    clock_offset: Res<ClockOffset>
 ) {
-    if( server_time_res.0 == 0) {
-        println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
+    if( server_time_res.0 == 0 || client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
+       // println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
         return;
     }
-
+ //  println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
     for(mut delta_buffer, mut prev_state, mut target_state,  mut transform) in query.iter_mut() {
   
-        let mut render_time =  server_time_res.0 + client_time.elapsed().as_millis()  - INTERPLOATE_BUFFER;   
+        //let mut render_time =  server_time_res.0 + client_time.elapsed().as_millis() - latency.0 as u128 - INTERPLOATE_BUFFER;   
 
+        let mut render_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
+
+        // println!("render_time  {:?} ", render_time );
         // Creo q esto podria eliminarse para optimizar
         //delta_buffer.0.sort_by(|a, b| a.1.cmp(&b.1));
       
 
-        while delta_buffer.0.len() > 1 {
+        while delta_buffer.0.len() > 1 {              
 
             if let Some((delta, event_time)) = delta_buffer.0.front() {  
               
 
                 if(&render_time < event_time) {
-                    //println!("aún no se llega a este evento porque render_time {:?} es menor que el event_time {:?} ", render_time, event_time );
+
+                    println!("aún no se llega a este evento porque render_time {:?} es menor que el event_time {:?} ", render_time, event_time );
                     break;
                 }  
 
                 println!("delta_buffer  {:?} ", delta_buffer );
+              
 
-
+                
                 if let Some((next_delta, next_event_time)) = delta_buffer.0.get(1) {
-
                   
-                    let next_unquantized_delta = next_delta.as_vec3().mul(TRANSLATION_PRECISION);
-                    
+                    let next_unquantized_delta = next_delta.as_vec3().mul(TRANSLATION_PRECISION);                    
                     // En caso ha llegado en desorden el evento.
                     // Evento llega con tiempo anterior al actual.
                     if(event_time > next_event_time) {
 
-                        println!("Llego en desorden  {:?} ", event_time );
+                        println!("Llego en desorden!!!!!!!!!!!!!!  {:?} ", event_time );
                         // Se ajusta nomás el delta del evento perdido directo a la posición actual.
                         let prev_position =  prev_state.translation + next_unquantized_delta;
                         transform.translation = transform.translation + next_unquantized_delta;
@@ -604,13 +725,13 @@ fn interpolation_delta(
                     //println!("current_pos  {:?} , prev_pos {:?} , next_pos {:?} ", transform.translation, prev_position , next_position );
     
                     transform.translation = prev_position.lerp(next_position, progress);
-                   // println!("Moved to  {:?}", transform.translation );
-                     println!("Moved to  {:?} from  {:?} -> {:?}", transform.translation, prev_position , next_position);
+                    // println!("Moved to  {:?}", transform.translation );
+                    println!("Moved to  {:?} from  {:?} -> {:?}", transform.translation, prev_position , next_position);
                     prev_state.translation = prev_position;
                     target_state.translation = next_position;
 
 
-                    delta_buffer.0.pop_front();
+                    // delta_buffer.0.pop_front();
                    
                 }
                 break;
@@ -620,12 +741,13 @@ fn interpolation_delta(
           
         }
 
-        if let Some((delta, event_time)) = delta_buffer.0.front() {  
+        /*if let Some((delta, event_time)) = delta_buffer.0.front() {  
             // Se le da un par de frames al buffer para limpiarse completamente.
-            let next_frame = render_time - 100;
+            let next_frame = render_time - 300;
             
-            println!("event_time  {:?}, render_time  {:?} ", event_time, render_time );
+            println!("event_time  {:?}, render_time  {:?}, delta  {:?}", event_time, render_time, delta );
             if(event_time < &next_frame && transform.translation != target_state.translation ) {
+                println!("event_time  {:?}, render_time  {:?}", event_time, render_time );
                 println!("Current transform  {:?} ", transform.translation );
                
                 let next_unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
@@ -635,8 +757,15 @@ fn interpolation_delta(
                 delta_buffer.0.pop_front();
             }
           
-        }
+        }*/
 
+        while let Some((_delta, event_time)) = delta_buffer.0.front() {
+            if render_time > *event_time && render_time - event_time > 500 {
+                delta_buffer.0.pop_front();
+            } else {
+                break;
+            }
+        }
     }
 
 }

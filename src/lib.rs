@@ -1,12 +1,17 @@
 pub mod pathing;
 pub mod monsters;
+pub mod interpolation;
 
 use bevy_spatial::{kdtree::KDTree3};
-use bevy::prelude::*;
+use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}};
 use bevy_renet::renet::*;
 use bevy_renet::*;
 use serde::{Deserialize, Serialize};
 use std::{f32::consts::PI, time::Duration};
+use bevy::render::render_resource::{ShaderStages, ShaderType};
+use bevy::reflect::TypePath;
+
+
 
 // 0.14 (Solution 1)
 #[derive(States, Default, Hash, Debug, PartialEq, Clone, Eq)]
@@ -22,11 +27,14 @@ pub enum AppState {
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
-pub const INTERPLOATE_BUFFER: u128 = 350;
+pub const INTERPLOATE_BUFFER: u128 = 100;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     SyncTimeRequest  {
+        client_time: u128
+    },
+    LatencyRequest  {
         client_time: u128
     },
 }
@@ -39,6 +47,9 @@ pub enum ServerMessage {
     SyncTimeResponse  {
         client_time: u128,
         server_time: u128
+    },
+    LatencyResponse  {
+        client_time: u128
     }
 }
 
@@ -264,15 +275,74 @@ pub fn setup_level(
     mut commands: Commands, 
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>,  
-  
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
+
+
+
+    // Load the texture
+    let texture_handle = asset_server.load("textures/grass/grass1-albedo3.png");
+
+
+    // Create a material with the texture
+    let material = materials.add(StandardMaterial {
+        base_color_texture: Some(texture_handle),
+        ..Default::default()
+    });
     // plane
     commands.spawn((PbrBundle {
         mesh: meshes.add(Mesh::from(Cuboid::new(301., 0.0, 301.))),
+        //material: material,
         material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
         transform: Transform::from_xyz(0.0, 0.99, 0.0),
         ..Default::default()
     },  Name::new("Plane")));
+    
+
+     // Create a plane to represent the water surface
+     let water_mesh = meshes.add(Plane3d::default().mesh().size(50.0, 50.0));
+
+
+        // Load the custom shader
+    // let shader_handle: Handle<Shader> = asset_server.load("shaders/water.wgsl");
+
+     // Add a custom material (we'll create this next)
+     let water_material = materials.add(StandardMaterial {
+         base_color: Color::srgba(0.0, 0.3, 0.6, 0.7), // Transparent blue color for water
+         reflectance: 0.5,  // Make it slightly reflective
+         perceptual_roughness: 0.1,  // Lower roughness for a more reflective, glossy surface
+         metallic: 0.1,  // Water tends to have a little bit of a metallic reflection
+         ..Default::default()
+     });
+
+    // Create a material using the shader
+    let water_material = water_materials.add(WaterMaterial { time: 0.0 });
+
+    Cuboid::default();
+
+    commands.spawn((MaterialMeshBundle { 
+        mesh: meshes.add(Mesh::from(Cuboid::new(31., 0.0, 31.))),
+        transform: Transform::from_xyz(10.0, 2., 10.0),
+        material: water_materials.add(WaterMaterial {
+            time: 0.5 
+        }),
+        ..default()
+    },  Name::new("Water")));
+
+
+    let tree_handle = asset_server.load("models/palm_tree.glb#Scene0");
+
+    commands.spawn(SceneBundle {
+        scene: tree_handle.clone(),
+        transform: Transform {
+            translation: Vec3::new(20.0, 0.0, 20.0),
+            scale: Vec3::splat(0.7),
+            //rotation,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
 
     commands.spawn((PbrBundle {
         mesh: meshes.add(Mesh::from(Cuboid::new(5., 4.0, 5.))),
@@ -308,6 +378,16 @@ pub fn setup_level(
     });
 
 
+}
+
+// Update the time in the water shader
+pub fn  move_water(
+    time: Res<Time>, 
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
+) {
+    for mut water in water_materials.iter_mut() {
+        water.1.time += time.delta_seconds();
+    }
 }
 
 #[derive(Debug, Default, Resource)]
@@ -355,6 +435,22 @@ pub fn spawn_fireball(
 }
 
 
-pub fn move_player() {
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 
+pub struct WaterMaterial {
+    #[uniform(0)]
+    time: f32
+}
+
+impl Material for WaterMaterial {
+
+    fn vertex_shader() -> ShaderRef {
+        "shaders/water2.wgsl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "shaders/water2.wgsl".into()
+    }
+
+    
 }
