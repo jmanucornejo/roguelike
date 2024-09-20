@@ -1,6 +1,6 @@
 pub mod pathing;
 pub mod monsters;
-pub mod interpolation;
+pub mod client_plugins;
 
 use bevy_spatial::{kdtree::KDTree3};
 use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}};

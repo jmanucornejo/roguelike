@@ -4,7 +4,7 @@ use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
 use pathfinding::prelude::astar;
 use pathing::*;
-use interpolation::*;
+use client_plugins::interpolation::*;
 use roguelike::*;
 use bevy::{asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
 pub use bevy_renet::renet::transport::ClientAuthentication;
@@ -49,21 +49,15 @@ struct Billboard;
 #[derive(Default, Resource, )]
 struct NetworkMapping(HashMap<Entity, Entity>);
 
-
-#[derive(Default, Resource)]
-struct ServerTime(u128);
-
 #[derive(Default, Resource)]
 struct Latency(u16);
-
-#[derive(Default, Resource)]
-struct ClockOffset(u128);
 
 #[derive(Default, Resource)]
 struct SyncData {
     timer: Timer,
     samples: Vec<u16>,
     total_rtt: u128,
+    total_offset: u128,
     sync_attempts: usize,
     max_attempts: usize,
 }
@@ -173,6 +167,7 @@ fn main() {
             timer: Timer::from_seconds(0.5, TimerMode::Repeating),
             samples: Vec::new(),
             total_rtt: 0,
+            total_offset: 0,
             sync_attempts: 0,
             max_attempts: 10, // Number of sync requests to send
         })
@@ -181,6 +176,7 @@ fn main() {
       
         .add_systems(Startup, (setup_level,setup_camera,move_water))
         .add_plugins(Sprite3dPlugin)
+        .add_plugins(InterpolationPlugin)
         // .add_plugins(PathingPlugin)
         .add_systems(OnEnter(AppState::InGame), ((setup_player, setup_target, setup_server_time_and_latency)))
         .add_systems(Update, 
@@ -206,10 +202,7 @@ fn main() {
                 // client_sync_entities.run_if(in_state(AppState::InGame)),
                 //click_move_players_system.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
-                // interpolation_delta.run_if(in_state(AppState::InGame)).after(client_sync_players),
-                interpolate_positions_with_deltas.run_if(in_state(AppState::InGame)).after(client_sync_players),
 
-                // sprite_movement.run_if(in_state(AppState::InGame))
             )
         );
             
@@ -324,7 +317,7 @@ fn client_sync_players(
     acolyte            : Res<AcolyteAssets>,
     pig_assets            : Res<PigAssets>,
     mut sprite_params : Sprite3dParams,       
-    mut entities: Query<(Entity, &Transform, &mut MyMovementState, &mut OldMovementState, &mut TargetPos, &mut DeltaBuffer, &mut PositionHistory)>, 
+    mut entities: Query<(Entity, &Transform, &mut MyMovementState, &mut OldMovementState, &mut TargetPos, &mut PositionHistory)>, 
     mut server_time_res: ResMut<ServerTime>,
 ) {
     let client_id = client_id.0;
@@ -359,7 +352,6 @@ fn client_sync_players(
                         .insert(Velocity::default())
                         .insert(Rotation(0) )
                         .insert(NotShadowCaster)
-                        .insert(DeltaBuffer(VecDeque::new()))
                         .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
                         .insert(PrevState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })  
                         .insert(TargetState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })
@@ -462,15 +454,14 @@ fn client_sync_players(
 
                     //println!("client_entity {} ", client_entity);
                   
-                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut delta_buffer, mut position_history)) = entities.get_mut(*client_entity) {                    
+                    if let Ok( (final_entity, transform,  mut state,  old_state, mut target_pos, mut position_history)) = entities.get_mut(*client_entity) {                    
 
                         let quantized_delta = IVec3 { 
                             x: x,
                             y: y,
                             z: z
                         };       
-                        position_history.add_delta(quantized_delta,server_time);
-                        delta_buffer.0.push_back((quantized_delta, server_time));             
+                        position_history.add_delta(quantized_delta,server_time);       
 
                     }
                 }               
@@ -544,10 +535,12 @@ fn client_sync_time_system(
                 let rtt = time.elapsed().as_millis() - client_time;
                 let one_way_latency = rtt / 2;
                 server_time_res.0 = server_time + one_way_latency;
+                clock_offset.0 = server_time_res.0 - time.elapsed().as_millis();
                 latency.0 = one_way_latency as u16;
                 info!("server_time_res {:?}, latency  {:?}", server_time_res.0, one_way_latency);
 
                 sync_data.total_rtt += rtt;
+                sync_data.total_offset +=  clock_offset.0;
                 sync_data.sync_attempts += 1;
 
                 if sync_data.sync_attempts >= sync_data.max_attempts {
@@ -557,8 +550,10 @@ fn client_sync_time_system(
 
                     server_time_res.0 = server_time + one_way_latency;
                     latency.0 = one_way_latency as u16;
-                    clock_offset.0 = server_time_res.0 - time.elapsed().as_millis();
+                    clock_offset.0 = sync_data.total_offset / sync_data.sync_attempts as u128;
                     info!("one_way_latency {:?}",one_way_latency);
+                    info!("offset {:?}",clock_offset.0);
+                   
                    
                     // Adjust client clock
                     //client_time.0 = estimated_server_time;
@@ -631,7 +626,29 @@ fn client_sync_time_system(
     }
 }
 
+fn clean_buffer(  
+    client_time: Res<Time>,
+    latency: Res<Latency>,
+    clock_offset: Res<ClockOffset>,
+    mut query: Query<(&mut PositionHistory, &mut Transform)>,
+) {
 
+    if( clock_offset.0 == 0 || client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
+        return;
+    }
+
+    let target_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
+
+
+    for (mut history, mut transform) in query.iter_mut() {
+      
+        if let Some(delta) = history.clean_buffer(target_time) {
+            println!("Se cambia el transform porque llegó tarde un paquete y no se procesó. {:?} ", delta);
+            transform.translation += delta;
+            continue;
+        }
+    }
+}
 
 fn interpolate_positions_with_deltas(
     server_time_res: Res<ServerTime>,
@@ -648,7 +665,6 @@ fn interpolate_positions_with_deltas(
 
     let target_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
 
-
     for (mut history, mut transform) in query.iter_mut() {
       
         if let Some(interpolated_position) = history.interpolate_delta_positions(target_time) {
@@ -659,116 +675,6 @@ fn interpolate_positions_with_deltas(
     }
 }
 
-fn interpolation_delta(
-    mut query: Query<(&mut DeltaBuffer, &mut PrevState,  &mut TargetState, &mut Transform)>, 
-    mut server_time_res: ResMut<ServerTime>,
-    client_time: Res<Time>,
-    latency: Res<Latency>,
-    clock_offset: Res<ClockOffset>
-) {
-    if( server_time_res.0 == 0 || client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
-       // println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
-        return;
-    }
- //  println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
-    for(mut delta_buffer, mut prev_state, mut target_state,  mut transform) in query.iter_mut() {
-  
-        //let mut render_time =  server_time_res.0 + client_time.elapsed().as_millis() - latency.0 as u128 - INTERPLOATE_BUFFER;   
-
-        let mut render_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
-
-        // println!("render_time  {:?} ", render_time );
-        // Creo q esto podria eliminarse para optimizar
-        //delta_buffer.0.sort_by(|a, b| a.1.cmp(&b.1));
-      
-
-        while delta_buffer.0.len() > 1 {              
-
-            if let Some((delta, event_time)) = delta_buffer.0.front() {  
-              
-
-                if(&render_time < event_time) {
-
-                    println!("aún no se llega a este evento porque render_time {:?} es menor que el event_time {:?} ", render_time, event_time );
-                    break;
-                }  
-
-                println!("delta_buffer  {:?} ", delta_buffer );
-              
-
-                
-                if let Some((next_delta, next_event_time)) = delta_buffer.0.get(1) {
-                  
-                    let next_unquantized_delta = next_delta.as_vec3().mul(TRANSLATION_PRECISION);                    
-                    // En caso ha llegado en desorden el evento.
-                    // Evento llega con tiempo anterior al actual.
-                    if(event_time > next_event_time) {
-
-                        println!("Llego en desorden!!!!!!!!!!!!!!  {:?} ", event_time );
-                        // Se ajusta nomás el delta del evento perdido directo a la posición actual.
-                        let prev_position =  prev_state.translation + next_unquantized_delta;
-                        transform.translation = transform.translation + next_unquantized_delta;
-                        delta_buffer.0.remove(1);
-                        break;
-                    }
-
-                    //println!("original_translation  {:?}", prev_state.translation);
-                    println!("event_time  {:?}, render_time  {:?} next_event_time  {:?} ",   event_time, render_time, next_event_time);
-                    let progress  = ((render_time - event_time) as f32 / (next_event_time - event_time) as f32 );
-                    println!("progress  {:?} ", progress );
-                    let unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
-                   
-         
-                    let prev_position =  prev_state.translation + unquantized_delta;
-                    let next_position =  prev_position + next_unquantized_delta;
-
-                    //println!("current_pos  {:?} , prev_pos {:?} , next_pos {:?} ", transform.translation, prev_position , next_position );
-    
-                    transform.translation = prev_position.lerp(next_position, progress);
-                    // println!("Moved to  {:?}", transform.translation );
-                    println!("Moved to  {:?} from  {:?} -> {:?}", transform.translation, prev_position , next_position);
-                    prev_state.translation = prev_position;
-                    target_state.translation = next_position;
-
-
-                    // delta_buffer.0.pop_front();
-                   
-                }
-                break;
-              
-            
-            }
-          
-        }
-
-        /*if let Some((delta, event_time)) = delta_buffer.0.front() {  
-            // Se le da un par de frames al buffer para limpiarse completamente.
-            let next_frame = render_time - 300;
-            
-            println!("event_time  {:?}, render_time  {:?}, delta  {:?}", event_time, render_time, delta );
-            if(event_time < &next_frame && transform.translation != target_state.translation ) {
-                println!("event_time  {:?}, render_time  {:?}", event_time, render_time );
-                println!("Current transform  {:?} ", transform.translation );
-               
-                let next_unquantized_delta = delta.as_vec3().mul(TRANSLATION_PRECISION);
-                prev_state.translation = target_state.translation;
-                transform.translation = target_state.translation;
-                println!("Final position  {:?} ", target_state.translation );
-                delta_buffer.0.pop_front();
-            }
-          
-        }*/
-
-        while let Some((_delta, event_time)) = delta_buffer.0.front() {
-            if render_time > *event_time && render_time - event_time > 500 {
-                delta_buffer.0.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-}
 
 
 fn client_move_entities(
