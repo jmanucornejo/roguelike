@@ -12,6 +12,7 @@ pub struct TargetPos {
 
 
 
+
 impl Plugin for PathingPlugin {
     fn build(&self, app: &mut App) {
         // add things to your app here
@@ -24,7 +25,7 @@ impl Plugin for PathingPlugin {
             .add_systems(
             FixedUpdate, (                   
                     get_velocity,
-                    apply_velocity_system
+                    apply_velocity_system.after(get_velocity)
                     //client_velocity.run_if(in_state(AppState::InGame)),
                 )
             );
@@ -52,47 +53,50 @@ impl Plugin for PathingPlugin {
             }
         }
 
+    
 
-        fn apply_velocity_system(mut query: Query<(&Velocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
-            for (velocity, mut transform, target_pos) in query.iter_mut() {
-
-                if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
-
-               
-                    //info!("current pos  {:?}!", transform.translation);
-                    //info!("target pos  {:?}!", target_pos.position);
-                    let diff = velocity.0 * time.delta_seconds();
-                    //info!("diff  {:?}!", diff);
-                    if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {
-                        transform.translation.x = target_pos.position.x;
-                    }
-                    else if target_pos.position.x <= transform.translation.x &&  transform.translation.x + diff.x <= target_pos.position.x {
-                        transform.translation.x = target_pos.position.x;
-                    }
-                    else {
-                        transform.translation.x +=  diff.x;
-                    }
-        
-                    if(target_pos.position.z >= transform.translation.z &&  transform.translation.z + diff.z >= target_pos.position.z) {
-                        transform.translation.z = target_pos.position.z;
-                    }
-                    else if(target_pos.position.z <= transform.translation.z &&  transform.translation.z + diff.z <= target_pos.position.z) {
-                        transform.translation.z = target_pos.position.z;
-                    }
-                    else {
-                        //info!("se mueve vertical  {:?}!", diff.z);
-                        transform.translation.z +=  diff.z;
-                    }
-                }
-                //transform.translation += velocity.0 * time.delta_seconds();
-            }
-        }
-        
-     
+       
     }
 
 
     
+}
+
+pub fn apply_velocity_system(mut query: Query<(&Velocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
+    for (velocity, mut transform, target_pos) in query.iter_mut() {
+
+        if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
+
+            //info!("diff  {:?}!", diff);
+            //info!("current pos  {:?}!", transform.translation);
+            //info!("target pos  {:?}!", target_pos.position);
+            //info!("diff  {:?}!", diff);
+            let diff = velocity.0 * time.delta_seconds();
+            //info!("diff  {:?}!", diff);
+            //info!("velocity {:?}, diff  {:?}!",velocity.0, diff);
+            if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {
+                transform.translation.x = target_pos.position.x;
+            }
+            else if target_pos.position.x <= transform.translation.x &&  transform.translation.x + diff.x <= target_pos.position.x {
+                transform.translation.x = target_pos.position.x;
+            }
+            else {
+                transform.translation.x +=  diff.x;
+            }
+
+            if(target_pos.position.z >= transform.translation.z &&  transform.translation.z + diff.z >= target_pos.position.z) {
+                transform.translation.z = target_pos.position.z;
+            }
+            else if(target_pos.position.z <= transform.translation.z &&  transform.translation.z + diff.z <= target_pos.position.z) {
+                transform.translation.z = target_pos.position.z;
+            }
+            else {
+                //info!("se mueve vertical  {:?}!", diff.z);
+                transform.translation.z +=  diff.z;
+            }
+        }
+        //transform.translation += velocity.0 * time.delta_seconds();
+    }
 }
 
 

@@ -1,7 +1,9 @@
 pub mod pathing;
 pub mod monsters;
 pub mod client_plugins;
+pub mod server_plugins;
 
+use avian3d::prelude::*;
 use bevy_spatial::{kdtree::KDTree3};
 use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}};
 use bevy_renet::renet::*;
@@ -27,7 +29,6 @@ pub enum AppState {
 pub const PLAYER_MOVE_SPEED: f32 = 5.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
-pub const INTERPLOATE_BUFFER: u128 = 100;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -60,7 +61,7 @@ pub struct Velocity(pub Vec3);
 #[derive(Component, Debug)]
 pub struct PrevState {
     pub translation: Vec3,
-    pub rotation: Rotation
+    pub rotation: Facing
 }
 
 #[derive(Debug, Default, Component)]
@@ -70,13 +71,13 @@ pub struct LineOfSight(pub Vec<Entity>);
 #[derive(Component, Debug)]
 pub struct TargetState {
     pub translation: Vec3,
-    pub rotation: Rotation
+    pub rotation: Facing
 }
 #[derive(Component,  PartialEq)]
 
 pub struct MovementDelta {
     pub translation: IVec3,
-    pub rotation: Rotation,
+    pub rotation: Facing,
     pub server_time: u128,
     pub real_translation: [f32; 3]
 }
@@ -86,7 +87,7 @@ pub struct MovementDelta {
 
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Component, Clone)]
-pub struct Rotation(pub i8);
+pub struct Facing(pub i8);
 
 #[derive(Debug, Component)]
 pub struct Player {
@@ -163,7 +164,7 @@ pub enum ServerMessages {
         x: i32,
         y: i32,
         z: i32,
-        rotation: Rotation,
+        rotation: Facing,
         server_time: u128,
         //real_translation: [f32; 3],
     },
@@ -279,36 +280,40 @@ pub fn setup_level(
     asset_server: Res<AssetServer>,
 ) {
 
-
+    
 
     // Load the texture
-    let texture_handle = asset_server.load("textures/grass/grass1-albedo3.png");
+    //let texture_handle = asset_server.load("textures/grass/grass1-albedo3.png");
 
 
     // Create a material with the texture
-    let material = materials.add(StandardMaterial {
+    /*let material = materials.add(StandardMaterial {
         base_color_texture: Some(texture_handle),
         ..Default::default()
-    });
+    });*/
     // plane
-    commands.spawn((PbrBundle {
-        mesh: meshes.add(Mesh::from(Cuboid::new(301., 0.0, 301.))),
-        //material: material,
-        material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
-        transform: Transform::from_xyz(0.0, 0.99, 0.0),
-        ..Default::default()
-    },  Name::new("Plane")));
-    
+    /*commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Mesh::from(Cuboid::new(301., 0.5, 301.))),
+            //material: material,
+            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
+            transform: Transform::from_xyz(0.0, 0.99, 0.0),
+            ..Default::default()
+        },  Name::new("Plane"),  
+        ColliderConstructor::TrimeshFromMesh,
+        RigidBody::Static,
+    ));*/
+  
 
      // Create a plane to represent the water surface
-     let water_mesh = meshes.add(Plane3d::default().mesh().size(50.0, 50.0));
+     //let water_mesh = meshes.add(Plane3d::default().mesh().size(50.0, 50.0));
 
 
         // Load the custom shader
     // let shader_handle: Handle<Shader> = asset_server.load("shaders/water.wgsl");
 
      // Add a custom material (we'll create this next)
-     let water_material = materials.add(StandardMaterial {
+     /*let water_material = materials.add(StandardMaterial {
          base_color: Color::srgba(0.0, 0.3, 0.6, 0.7), // Transparent blue color for water
          reflectance: 0.5,  // Make it slightly reflective
          perceptual_roughness: 0.1,  // Lower roughness for a more reflective, glossy surface
@@ -328,7 +333,7 @@ pub fn setup_level(
             time: 0.5 
         }),
         ..default()
-    },  Name::new("Water")));
+    },  Name::new("Water")));*/
 
 
     let tree_handle = asset_server.load("models/palm_tree.glb#Scene0");
@@ -344,7 +349,54 @@ pub fn setup_level(
         ..Default::default()
     });
 
-    commands.spawn((PbrBundle {
+
+    // Load textures
+    /*let black_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5514_seamless_2.jpg.png");
+    let red_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5487_seamless.jpg");
+    let green_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5498_seamless.jpg");
+    let blue_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5525_seamless.jpg");
+
+     // Load the RGB mask
+     let mask_texture_handle: Handle<Image> = asset_server.load("terrain/terrain_mask_RGB.png");
+
+
+     let shader_handle: Handle<Shader> = asset_server.load("shaders/bujama.wgsl");
+
+    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");*/
+    
+    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama-2.gltf#Scene0");
+    //let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");
+    commands.spawn((
+        SceneBundle {
+            scene: scene_handle.clone(),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 0.0),
+                //scale: Vec3::splat(25.0),
+                //rotation,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Name::new("Map"),
+        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
+        RigidBody::Static
+    ));
+
+    /*commands.spawn((
+        RigidBody::Dynamic,
+        Collider::cuboid(1.0, 1.0, 1.0),
+        Mass(5.0),
+        PbrBundle {
+            mesh: meshes.add(Cuboid::default()),
+            material: materials.add(Color::srgb(0.8, 0.7, 0.6)),
+            transform: Transform::from_xyz(3.0, 5.0, 5.0),
+            ..default()
+        },
+        GravityScale(1.0),
+    ));*/
+
+
+   /* commands.spawn((PbrBundle {
         mesh: meshes.add(Mesh::from(Cuboid::new(5., 4.0, 5.))),
         material: materials.add(Color::srgb(0.3, 0.0, 0.3)),
         transform: Transform::from_xyz(0.0, 0.99, 0.0),
@@ -361,7 +413,7 @@ pub fn setup_level(
                 Pos(-2,2), Pos(-2,1), Pos(-2,0), Pos(-2,-1), Pos(-2,-2)
             ] 
         }
-    );
+    );*/
 
     // light
     commands.spawn(DirectionalLightBundle {

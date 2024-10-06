@@ -1,7 +1,15 @@
 
 
+
+use avian3d::prelude::{Collider, GravityScale, LockedAxes, RigidBody};
 use bevy::log::{LogPlugin};
 use bevy_obj::ObjPlugin;
+use server_plugins::physics::*;
+///use avian3d::math::{AdjustPrecision, Quaternion, Scalar, Vector};
+////use avian3d::prelude::{CoefficientCombine, Collider, ColliderParent, Collisions, Friction, GravityScale, LinearVelocity, LockedAxes, Mass, Position, PostProcessCollisions, Restitution, RigidBody, Rotation, Sensor};
+use avian3d::{PhysicsPlugins};
+
+
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
@@ -47,6 +55,7 @@ fn main() {
         .add_plugins(AutomaticUpdate::<NearestNeighbourComponent>::new())
         .add_plugins(ObjPlugin) 
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
+        .add_plugins(PhysicsPlugins::default())
        // .add_plugins(MinimalPlugins)
         //.add_plugins(LogPlugin::default())
         .add_systems(
@@ -57,8 +66,7 @@ fn main() {
             )
         )
         .init_state::<AppState>()
-     
-        .add_plugins(MonstersPlugin)
+        .add_plugins((ServerPhysicsPlugin, MonstersPlugin))
         .add_plugins(RenetServerPlugin)
         .insert_resource(RenetServerVisualizer::<200>::new(
             RenetVisualizerStyle::default(),
@@ -81,13 +89,14 @@ fn main() {
             FixedUpdate, (
                 // server_network_sync,      
                 //server_network_sync_player_out,    
-                network_send_delta_position_system,      
+                network_send_delta_position_system.after(roguelike::pathing::apply_velocity_system),      
                 click_move_players_system,
                 line_of_sight
                 //monster_test
             )
         )
         .add_systems(PostUpdate, projectile_on_removal_system)
+      
         .run();
 }
 
@@ -215,16 +224,25 @@ fn server_events(
 
                 // Spawn new player              
                 let player_entity = commands
-                    .spawn(PbrBundle {
-                        mesh: meshes.add(Mesh::from(Capsule3d::default())),
-                        material: materials.add(Color::srgb(0.8, 0.7, 0.6)),
-                        transform,
-                        ..Default::default()
-                    })
+                    .spawn((
+                        PbrBundle {
+                            mesh: meshes.add(Mesh::from(Capsule3d::default())),
+                            material: materials.add(Color::srgb(0.8, 0.7, 0.6)),
+                            transform,
+                            ..Default::default()
+                        },  
+                        LockedAxes::ROTATION_LOCKED,
+                        //Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
+                        //Restitution::ZERO.with_combine_rule(CoefficientCombine::Min), 
+                        Collider::capsule(0.4, 1.0),
+                        //Mass(5.0),
+                        GravityScale(1.0),
+                        RigidBody::Kinematic     
+                    ))
                     .insert(PlayerInput::default())
                     .insert(Velocity::default())
-                    .insert(Rotation(0) )                        
-                    .insert(PrevState { translation: transform.translation, rotation: Rotation(0)})
+                    .insert(Facing(0) )                        
+                    .insert(PrevState { translation: transform.translation, rotation: Facing(0)})
                     .insert(NearestNeighbourComponent)
                     .insert(TargetPos { position: transform.translation})
                     .insert(Player { id: *client_id })
@@ -511,7 +529,7 @@ fn server_network_sync_player_out(
 pub fn network_send_delta_position_system(
     mut server: ResMut<RenetServer>, 
     players: Query<(&Player, &LineOfSight)>,
-    mut query: Query<(Entity, &Transform, &Rotation,  &mut PrevState,), Changed<Transform>>,
+    mut query: Query<(Entity, &Transform, &Facing,  &mut PrevState,), Changed<Transform>>,
     time: Res<Time>,
 ) {
     for (player, line_of_sight) in players.iter() {
@@ -524,7 +542,7 @@ pub fn network_send_delta_position_system(
                 let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
              
                 if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO {                                
-                    println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
+                    //println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                     let message= ServerMessages::MoveDelta {
                         entity,
                         x: delta_translation.x,
@@ -547,6 +565,8 @@ pub fn network_send_delta_position_system(
     
     // posteriormente, se actualiza las ubicaciones antiguas de las entidades.
     for (_entity, transform, rotation, mut prev_state) in query.iter_mut() {
+        
+        //println!("Se actualiza prev state  {:?}",transform.translation);   
         prev_state.translation = transform.translation;
         prev_state.rotation = rotation.clone();
     }
@@ -587,5 +607,4 @@ pub fn line_of_sight(
     }    
 
 }
-
 

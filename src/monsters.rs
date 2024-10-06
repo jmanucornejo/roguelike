@@ -95,8 +95,8 @@ impl Plugin for MonstersPlugin {
                             )
                         )
                         .insert(Velocity::default())
-                        .insert(Rotation(0))
-                        .insert(PrevState { translation: transform.translation, rotation: Rotation(0)})
+                        .insert(Facing(0))
+                        .insert(PrevState { translation: transform.translation, rotation: Facing(0)})
                         .insert(NearestNeighbourComponent)
                         .insert(TargetPos { position: transform.translation.into() });       
                     });

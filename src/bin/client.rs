@@ -1,11 +1,19 @@
 
+use avian3d::math::Scalar;
+use avian3d::prelude::Collider;
+use avian3d::prelude::RigidBody;
+use avian3d::prelude::*;
 use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
 use pathfinding::prelude::astar;
 use pathing::*;
 use client_plugins::interpolation::*;
+use client_plugins::client_clock_sync::*;
+use client_plugins::shared_resources::*;
+
 use roguelike::*;
+
 use bevy::{asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
 pub use bevy_renet::renet::transport::ClientAuthentication;
 use bevy_renet::{renet::*, transport::NetcodeClientPlugin};
@@ -109,10 +117,10 @@ struct PigAssets {
 
 
 #[derive(AssetCollection, Resource)]
-struct AcolyteAssets {
-    #[asset(texture_atlas_layout(tile_size_x = 50, tile_size_y = 75, columns = 5, rows = 1, padding_x = 12, padding_y = 12, offset_x = 6, offset_y = 6))]
+struct ChaskiAssets {
+    #[asset(texture_atlas_layout(tile_size_x = 54, tile_size_y = 129, columns = 8, rows = 1, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 40))]
     layout: Handle<TextureAtlasLayout>,
-    #[asset(path = "acolyte.png")]
+    #[asset(path = "chasqui-spritesheet.png")]
     sprite: Handle<Image>,
 }
 
@@ -145,7 +153,7 @@ fn main() {
                 .load_collection::<MyAssets>()
                 .load_collection::<PigAssets>()
                 .load_collection::<GridTarget>()
-                .load_collection::<AcolyteAssets>()
+                .load_collection::<ChaskiAssets>()
         )
         .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
@@ -158,6 +166,10 @@ fn main() {
         .add_plugins(RenetClientPlugin)        
         .insert_resource(PlayerInput::default())
         .insert_resource(ClientLobby::default())
+        //.insert_resource(avian3d::prelude::SpatialQueryPipeline::default())
+        .add_plugins((
+            PhysicsPlugins::default(),
+        ))
         .insert_resource(Map::default())
         .insert_resource(NetworkMapping::default())
         .insert_resource(ServerTime::default())
@@ -176,13 +188,14 @@ fn main() {
       
         .add_systems(Startup, (setup_level,setup_camera,move_water))
         .add_plugins(Sprite3dPlugin)
-        .add_plugins(InterpolationPlugin)
+        .add_plugins((InterpolationPlugin, ClientClockSyncPlugin))
         // .add_plugins(PathingPlugin)
-        .add_systems(OnEnter(AppState::InGame), ((setup_player, setup_target, setup_server_time_and_latency)))
+        .add_systems(OnEnter(AppState::InGame), ((setup_player, setup_target)))
         .add_systems(Update, 
             (
                
                 update_cursor_system.run_if(in_state(AppState::InGame)),
+                // print_hits.run_if(in_state(AppState::InGame)).after(update_cursor_system),
                 player_input.run_if(in_state(AppState::InGame)),             
                 //camera_zoom.run_if(in_state(AppState::InGame)),
                 client_send_input.run_if(in_state(AppState::InGame)),              
@@ -196,9 +209,10 @@ fn main() {
         )  
         .add_systems(
             FixedUpdate, (        
-                client_sync_time_system,
+                
                 // client_move_entities.run_if(in_state(AppState::InGame)),
-                client_sync_players.run_if(in_state(AppState::InGame)).after(client_sync_time_system),
+                client_sync_players.run_if(in_state(AppState::InGame)),
+                // client_sync_players.run_if(in_state(AppState::InGame)).after(client_sync_time_system),
                 // client_sync_entities.run_if(in_state(AppState::InGame)),
                 //click_move_players_system.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
@@ -314,7 +328,7 @@ fn client_sync_players(
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
     assets            : Res<MyAssets>,
-    acolyte            : Res<AcolyteAssets>,
+    chaski            : Res<ChaskiAssets>,
     pig_assets            : Res<PigAssets>,
     mut sprite_params : Sprite3dParams,       
     mut entities: Query<(Entity, &Transform, &mut MyMovementState, &mut OldMovementState, &mut TargetPos, &mut PositionHistory)>, 
@@ -328,33 +342,40 @@ fn client_sync_players(
                 println!("Player {} connected at translation  {:?}", id, translation);     
 
                 let texture_atlas = TextureAtlas {
-                    layout: acolyte.layout.clone(),
+                    layout: chaski.layout.clone(),
                     index: 0,
                 };
                 
                 
-                let mut client_entity = commands.spawn((Sprite3d {
-                    image: acolyte.sprite.clone(),
-                    pixels_per_metre: 37.5,
-                    alpha_mode: AlphaMode::Blend,
-                    unlit: true,
-                    transform: Transform::from_xyz(translation[0], translation[1]+1.0, translation[2]),
-                    // transform: Transform::from_xyz(0., 0., 0.),
-                    // pivot: Some(Vec2::new(0.5, 0.5)),
+                let mut client_entity = commands.spawn(
+            (
+                        Sprite3d {
+                            image: chaski.sprite.clone(),
+                            pixels_per_metre: 37.5,
+                            alpha_mode: AlphaMode::Blend,
+                            unlit: true,
+                            transform: Transform::from_xyz(translation[0], translation[1]+1.0, translation[2]),
+                            // transform: Transform::from_xyz(0., 0., 0.),
+                            // pivot: Some(Vec2::new(0.5, 0.5)),
 
-                    ..default()
-                }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()), Name::new("Player")));
+                            ..default()
+                        }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()), Name::new("Player"),
+                        //Collider::capsule(0.4, 1.0),
+                        //RigidBody::Dynamic     
+                    ),
+                        
+                );
 
                 if client_id == id.raw() {
                     client_entity
                         .insert(ControlledPlayer) 
                         .insert(Billboard)
                         .insert(Velocity::default())
-                        .insert(Rotation(0) )
+                        .insert(Facing(0) )
                         .insert(NotShadowCaster)
                         .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
-                        .insert(PrevState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })  
-                        .insert(TargetState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Rotation(0) })
+                        .insert(PrevState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Facing(0) })  
+                        .insert(TargetState { translation: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, rotation: Facing(0) })
                         .insert(TargetPos { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
                         .insert(OldMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time })
                         .insert(MyMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time})
@@ -435,7 +456,7 @@ fn client_sync_players(
                 monster_entity
                     .insert(Billboard)
                     .insert(Velocity::default())
-                    .insert(Rotation(0))
+                    .insert(Facing(0))
                     .insert(OldMovementState { position: translation.into(), server_time })
                     .insert(MyMovementState { position: translation.into(), server_time });
                 /*let monster_entity = commands.spawn(PbrBundle {
@@ -497,7 +518,7 @@ fn client_sync_players(
 }
 
 
-
+/* 
 fn setup_server_time_and_latency(
     time: Res<Time>,
     mut client: ResMut<RenetClient>,
@@ -508,9 +529,9 @@ fn setup_server_time_and_latency(
     client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
     //client.send_message(reliable_channel_id, ping_message);
     info!("Sent sync time request!");
-}
+}*/
 
-
+/*
 fn client_sync_time_system(
     time: Res<Time>,
     mut sync_data: ResMut<SyncData>,
@@ -624,56 +645,8 @@ fn client_sync_time_system(
             }
         }
     }
-}
+} */
 
-fn clean_buffer(  
-    client_time: Res<Time>,
-    latency: Res<Latency>,
-    clock_offset: Res<ClockOffset>,
-    mut query: Query<(&mut PositionHistory, &mut Transform)>,
-) {
-
-    if( clock_offset.0 == 0 || client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
-        return;
-    }
-
-    let target_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
-
-
-    for (mut history, mut transform) in query.iter_mut() {
-      
-        if let Some(delta) = history.clean_buffer(target_time) {
-            println!("Se cambia el transform porque llegó tarde un paquete y no se procesó. {:?} ", delta);
-            transform.translation += delta;
-            continue;
-        }
-    }
-}
-
-fn interpolate_positions_with_deltas(
-    server_time_res: Res<ServerTime>,
-    client_time: Res<Time>,
-    latency: Res<Latency>,
-    clock_offset: Res<ClockOffset>,
-    mut query: Query<(&mut PositionHistory, &mut Transform)>,
-) {
-
-    if( server_time_res.0 == 0 || client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
-            println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
-         return;
-     }
-
-    let target_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
-
-    for (mut history, mut transform) in query.iter_mut() {
-      
-        if let Some(interpolated_position) = history.interpolate_delta_positions(target_time) {
-            println!("Se cambia el transform {:?} ", interpolated_position);
-            transform.translation = interpolated_position;
-            continue;
-        }
-    }
-}
 
 
 
@@ -819,7 +792,7 @@ fn client_sync_entities(
     player_entities: Query<Entity, With<ControlledPlayer>>,
     mut network_mapping: ResMut<NetworkMapping>,
     assets            : Res<MyAssets>,
-    acolyte            : Res<AcolyteAssets>,
+    chaski            : Res<ChaskiAssets>,
     pig_assets            : Res<PigAssets>,
     mut sprite_params : Sprite3dParams,       
 ) {
@@ -834,12 +807,12 @@ fn client_sync_entities(
                 if client_id == id.raw() {
                     
                     let texture_atlas = TextureAtlas {
-                        layout: acolyte.layout.clone(),
+                        layout: chaski.layout.clone(),
                         index: 0,
                     };                    
 
                     let mut client_entity = commands.spawn((Sprite3d {
-                        image: acolyte.sprite.clone(),
+                        image: chaski.sprite.clone(),
                         pixels_per_metre: 40.,
                         alpha_mode: AlphaMode::Blend,
                         unlit: true,
@@ -855,7 +828,7 @@ fn client_sync_entities(
                         .insert(ControlledPlayer) 
                         .insert(Billboard)
                         .insert(Velocity::default())
-                        .insert(Rotation(0) )
+                        .insert(Facing(0) )
                         .insert(NotShadowCaster)                     
                         .insert(TargetPos { position: Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}})
                         .insert(MyMovementState { position:Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, server_time})
@@ -916,7 +889,7 @@ fn client_sync_entities(
                 monster_entity
                     .insert(Billboard)
                     .insert(Velocity::default())
-                    .insert(Rotation(0));
+                    .insert(Facing(0));
     
                 network_mapping.0.insert(networked_entities.entities[i], monster_entity.id());
              
@@ -1032,6 +1005,7 @@ fn setup_camera(mut commands: Commands) {
                 pitch_lower_limit: Some(-0.0),
                 ..default()
             },
+            RayCaster::default()
         ));
 }
 
@@ -1155,23 +1129,91 @@ fn setup_target(mut commands: Commands,
 fn update_cursor_system(
     primary_window: Query<&Window, With<PrimaryWindow>>,
     mut target_query: Query<&mut Transform, With<Target>>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
+    camera_query: Query<(&Camera, &mut RayCaster, &GlobalTransform)>,
+    spatial_query: SpatialQuery
 ) {
-    let (camera, camera_transform) = camera_query.single();
+    let (camera, mut ray_caster,camera_transform) = camera_query.single();
+    
     let mut target_transform = target_query.single_mut();
     if let Some(cursor_pos) = primary_window.single().cursor_position() {
+
         if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-            if let Some(distance) = ray.intersect_plane(Vec3::Y, InfinitePlane3d::new(Vec3::Y)) {
+
+            let cam_transform = camera_transform.compute_transform();
+            let direction = ray.direction;
+            
+          
+            if let Some(first_hit) = spatial_query.cast_ray(
+                cam_transform.translation,                    // Origin
+                direction,                       // Direction
+                Scalar::MAX,                         // Maximum time of impact (travel distance)
+                true,                          // Does the ray treat colliders as "solid"
+                SpatialQueryFilter::default(), // Query filter
+            ) {
+                //println!("First hit: {:?}", first_hit);
+                println!(
+                    "Hit entity {:?} at {} with normal {}",
+                    first_hit.entity,
+                    ray.origin + *ray.direction * first_hit.time_of_impact,
+                    first_hit.normal,
+                );
+
+                let mut translation = ray.origin + *ray.direction * first_hit.time_of_impact;
+                translation.x = translation.x.round();
+                translation.z = translation.z.round();
+                translation.y =  translation.y + 1.; 
+                target_transform.translation = translation;
+
+                
+            }
+
+            let mut hits = vec![];
+
+            // Cast ray and get all hits
+            spatial_query.ray_hits_callback(
+                cam_transform.translation,                    // Origin
+                direction,                       // Direction
+                1000.0,                         // Maximum time of impact (travel distance)
+                true,                          // Does the ray treat colliders as "solid"
+                SpatialQueryFilter::default(), // Query filter
+                |hit| {                        // Callback function
+                    hits.push(hit);
+                    true
+                },
+            );
+
+            // Print hits
+            for hit in hits.iter() {
+                println!("Hit: {:?}", hit);
+            }
+
+        
+          
+            /*if let Some(distance) = ray.intersect_plane(Vec3::Y, InfinitePlane3d::new(Vec3::Y)) {
                 //info!("Ray {:?}!", ray.direction * distance + ray.origin );
                 let mut translation = ray.direction * distance + ray.origin;
                 translation.x = translation.x.round();
                 translation.z = translation.z.round();
                 target_transform.translation = translation;
-            }
+            }*/
         }
     }
 }
 
+fn print_hits(query: Query<(&RayCaster, &RayHits)>) {
+    for (ray, hits) in &query {
+        // For the faster iterator that isn't sorted, use `.iter()`
+            println!("ray  {:?} ",ray);
+        for hit in hits.iter_sorted() {
+            println!(
+                "Hit entity {:?} at {} with normal {}",
+                hit.entity,
+                ray.origin + *ray.direction * hit.time_of_impact,
+                hit.normal,
+            );
+        }
+    }
+}
 
 fn sprite_movement(
     mut query: Query<(&mut Velocity, &mut TextureAtlas)>,
