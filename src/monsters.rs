@@ -128,13 +128,13 @@ impl Plugin for MonstersPlugin {
                 let pos = Pos(fastrand::i32(-20..20),fastrand::i32(-20..20));
                 
                 if !map.blocked_paths.contains(&pos) {
-                    /*commands.trigger(SpawnMonster { monster: Monster {   
+                    commands.trigger(SpawnMonster { monster: Monster {   
                         hp: 100,
                         kind: MonsterKind::Pig,
                         move_destination: Vec3 { x: pos.0 as f32, y: 2.0, z: pos.1 as f32 },
                         speed: 5.0,
                         move_timer: Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once)
-                    }, pos: pos });       */ 
+                    }, pos: pos });       
                 }                
             }        
     

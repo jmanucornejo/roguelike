@@ -26,7 +26,7 @@ pub enum AppState {
 }
 
 
-pub const PLAYER_MOVE_SPEED: f32 = 5.0;
+pub const PLAYER_MOVE_SPEED: f32 = 10.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
 
@@ -364,7 +364,7 @@ pub fn setup_level(
 
     let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");*/
     
-    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama-2.gltf#Scene0");
+    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama-2.glb#Scene0");
     //let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");
     commands.spawn((
         SceneBundle {

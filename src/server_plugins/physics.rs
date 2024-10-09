@@ -97,7 +97,7 @@ fn kinematic_controller_collisions(
             if is_other_dynamic {
                 continue;
             }
-            //println!("deepest_penetration: {:?}", deepest_penetration); 
+          
 
             // Determine if the slope is climbable or if it's too steep to walk on.
             let slope_angle = normal.angle_between(Vector::Y);
@@ -108,6 +108,7 @@ fn kinematic_controller_collisions(
                 // If the slope is climbable, snap the velocity so that the character
                 // up and down the surface smoothly.
                 if climbable {
+                  
                     // Points in the normal's direction in the XZ plane.
                     let normal_direction_xz =
                         normal.reject_from_normalized(Vector::Y).normalize_or_zero();
@@ -130,7 +131,10 @@ fn kinematic_controller_collisions(
                     // *───────────────────*
 
                     let max_y_speed = -linear_velocity_xz * slope_angle.tan();
+                    //println!("max_y_speed: {:?}", max_y_speed); 
+                
                     linear_velocity.y = linear_velocity.y.max(max_y_speed);
+                    //println!("linear_velocity_y: {:?}", linear_velocity.y); 
                 } else {
                     // The character is intersecting an unclimbable object, like a wall.
                     // We want the character to slide along the surface, similarly to

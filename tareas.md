@@ -4,7 +4,6 @@ Arquitectura
 
 Mapa
 
-[ ] Importar un mapa de Ragnarok
 [ ] Crear un mapa más decente
 [X] Pathing
 [ ] Edificios
@@ -19,6 +18,7 @@ Client
 [X] Que los sprites siempre miren a la camara (billboarding)
 [ ] Que los sprites roten dependiendo del ángulo de la camara
 [ ] Que cambie el mouse dependiendo de la acción
+[ ] Que la camara no se meta en los cerros
 
 PvE / PvP
 [ ] Atacar monstruos

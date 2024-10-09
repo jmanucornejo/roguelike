@@ -4,11 +4,10 @@
 use avian3d::prelude::{Collider, GravityScale, LockedAxes, RigidBody};
 use bevy::log::{LogPlugin};
 use bevy_obj::ObjPlugin;
-use server_plugins::physics::*;
+
 ///use avian3d::math::{AdjustPrecision, Quaternion, Scalar, Vector};
 ////use avian3d::prelude::{CoefficientCombine, Collider, ColliderParent, Collisions, Friction, GravityScale, LinearVelocity, LockedAxes, Mass, Position, PostProcessCollisions, Restitution, RigidBody, Rotation, Sensor};
 use avian3d::{PhysicsPlugins};
-
 
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
@@ -66,7 +65,11 @@ fn main() {
             )
         )
         .init_state::<AppState>()
-        .add_plugins((ServerPhysicsPlugin, MonstersPlugin))
+        .add_plugins((
+            server_plugins::physics::ServerPhysicsPlugin, 
+            MonstersPlugin, 
+            server_plugins::server_clock_sync::ServerClockSyncPlugin
+        ))
         .add_plugins(RenetServerPlugin)
         .insert_resource(RenetServerVisualizer::<200>::new(
             RenetVisualizerStyle::default(),
@@ -76,7 +79,7 @@ fn main() {
         .insert_resource(create_renet_server())
         .add_plugins(NetcodeServerPlugin)
         .insert_resource(create_renet_transport())
-        .add_systems(FixedUpdate, sync_client_time)
+        //.add_systems(FixedUpdate, sync_client_time)
         .add_systems(
             Update, 
             (
@@ -197,18 +200,7 @@ fn server_events(
                     
                    
                 }
-                /*
-                // Antiguo, cuando se mostraba todo a todo el mundo.
-                for (entity, monster,  transform) in monsters.iter() {
-                    let translation: [f32; 3] = transform.translation.into();
-                    let message = bincode::serialize(&ServerMessages::SpawnMonster {
-                        entity,
-                        kind: monster.kind.clone(),
-                        translation,
-                    })
-                    .unwrap();
-                    server.send_message(*client_id, ServerChannel::ServerMessages, message);
-                }*/
+               
 
                 // Initialize other players for this new client
                 /*for (entity, player, transform) in players.iter() {
@@ -270,7 +262,7 @@ fn server_events(
                                 })
                                 .unwrap();
                 
-                                     // Send message to only one client
+                                // Send message to only one client
                                 server.send_message(player.id, ServerChannel::ServerMessages, message);
                                 //*handle = colors.black.clone();
                             }
@@ -366,34 +358,6 @@ fn server_events(
     }
 
 }
-
-fn sync_client_time(
-    mut server: ResMut<RenetServer>,
-    time: Res<Time>,
-) {
-    //let reliable_channel_id = ReliableChannelConfig::default().channel_id;
-    //println!("Time  {:?} ", time.elapsed().as_millis() );
-    // Receive message from channel
-    for client_id in server.clients_id() {
-        // The enum DefaultChannel describe the channels used by the default configuration
-        while let Some(message) = server.receive_message(client_id, ClientChannel::SyncTimeRequest) {
-            let client_message: ClientMessage = bincode::deserialize(&message).unwrap();
-            match client_message {
-                ClientMessage::SyncTimeRequest { client_time } => {
-                    //info!("Got sync time request from {}!", client_id);
-                    let sync_time_response = bincode::serialize(&ServerMessage::SyncTimeResponse { client_time: client_time, server_time: time.elapsed().as_millis() }).unwrap();
-                    server.send_message(client_id, DefaultChannel::ReliableOrdered, sync_time_response);
-                },
-                ClientMessage::LatencyRequest { client_time } => {
-                    //info!("Got Latency request from {}!", time.elapsed().as_millis(), client_id);
-                    let sync_time_response = bincode::serialize(&ServerMessage::LatencyResponse { client_time: client_time }).unwrap();
-                    server.send_message(client_id, DefaultChannel::ReliableOrdered, sync_time_response);
-                },
-            }
-        }
-    }
-}
-
 
 
 pub fn setup_simple_camera(mut commands: Commands) {
@@ -540,8 +504,16 @@ pub fn network_send_delta_position_system(
                 
                 let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
                 let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
-             
-                if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO {                                
+                
+                //println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
+                //delta_translation != IVec3::ZERO
+                if &prev_state.rotation != rotation 
+                || delta_translation.x != 0 
+                || delta_translation.z != 0 
+                || delta_translation.y.abs() > 5 // La gravedad hace que se mueva poquito y no queremos madnar 100000 de packets
+                {       
+                    println!("translation Y {:?} . servertie  {:?}",delta_translation.y , time.elapsed().as_millis());   
+                //if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO  {                                  
                     //println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                     let message= ServerMessages::MoveDelta {
                         entity,
