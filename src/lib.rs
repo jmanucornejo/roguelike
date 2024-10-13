@@ -64,9 +64,15 @@ pub struct PrevState {
     pub rotation: Facing
 }
 
+#[derive(Debug, Default, Component, Deserialize, Serialize,Clone)]
+pub struct SpriteId(pub u16);
+
+
 #[derive(Debug, Default, Component)]
 pub struct LineOfSight(pub Vec<Entity>);
 
+#[derive(Debug, Default, Component)]
+pub struct SeenBy(pub Vec<Entity>);
 
 #[derive(Component, Debug)]
 pub struct TargetState {
@@ -93,6 +99,12 @@ pub struct Facing(pub i8);
 pub struct Player {
     pub id: ClientId,
 }
+
+#[derive(Debug, Component)]
+pub struct NPC {
+    pub id: ClientId,
+}
+
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, Component, Resource)]
 pub struct PlayerInput {
@@ -130,10 +142,10 @@ pub type NNTree = KDTree3<NearestNeighbourComponent>;
 #[derive(Debug, PartialEq, Component, Clone)]
 pub struct Monster {
     pub hp: i32,
-    pub speed: f32,
+    //pub speed: f32,
     pub kind: MonsterKind,
-    pub move_destination: Vec3,
-    pub move_timer: Timer
+   // pub move_destination: Vec3,
+    //pub move_timer: Timer
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
@@ -156,15 +168,23 @@ pub enum ServerMessages {
         translation: [f32; 3],
         server_time: u128
     },
+    SpawnEntity {
+        entity: Entity,
+        sprite_id: SpriteId,
+        translation: [f32; 3],
+        facing: Facing
+    },
     PlayerRemove {
         id: ClientId,
+    },
+    DespawnEntity {
+        entity: Entity,
     },
     MoveDelta {
         entity: Entity,
         x: i32,
         y: i32,
         z: i32,
-        rotation: Facing,
         server_time: u128,
         //real_translation: [f32; 3],
     },

@@ -23,6 +23,12 @@ struct TestAssets {
     
 }
 
+#[derive(Debug, PartialEq, Component, Clone)]
+pub struct MonsterMovement {
+    pub move_destination: Vec3,
+    pub move_timer: Timer,
+    pub speed: f32,
+}
 
 
 
@@ -30,6 +36,7 @@ struct TestAssets {
 struct SpawnMonster {
     monster: Monster,
     pos: Pos,
+    monster_movement: MonsterMovement
 }
 
 
@@ -91,13 +98,16 @@ impl Plugin for MonstersPlugin {
                                 ..default()
                             }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),    
                             monster_spawner.monster.clone(),
+                            monster_spawner.monster_movement.clone(),
                             Name::new("Pig")
                             )
                         )
                         .insert(Velocity::default())
                         .insert(Facing(0))
+                        .insert(SpriteId(1))
                         .insert(PrevState { translation: transform.translation, rotation: Facing(0)})
                         .insert(NearestNeighbourComponent)
+                        //.insert(SeenBy::default())
                         .insert(TargetPos { position: transform.translation.into() });       
                     });
 
@@ -128,20 +138,25 @@ impl Plugin for MonstersPlugin {
                 let pos = Pos(fastrand::i32(-20..20),fastrand::i32(-20..20));
                 
                 if !map.blocked_paths.contains(&pos) {
-                    commands.trigger(SpawnMonster { monster: Monster {   
-                        hp: 100,
-                        kind: MonsterKind::Pig,
-                        move_destination: Vec3 { x: pos.0 as f32, y: 2.0, z: pos.1 as f32 },
-                        speed: 5.0,
-                        move_timer: Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once)
-                    }, pos: pos });       
+                    commands.trigger(SpawnMonster { 
+                        monster: Monster {   
+                            hp: 100,
+                            kind: MonsterKind::Pig, 
+                        }, 
+                        monster_movement: MonsterMovement {
+                            move_destination: Vec3 { x: pos.0 as f32, y: 2.0, z: pos.1 as f32 },
+                            move_timer: Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once),
+                            speed: 5.0    
+                        },
+                        pos: pos 
+                    });       
                 }                
             }        
     
         }     
 
         fn monster_movement_timer_reset(
-            mut query: Query<(&mut Monster, &Transform)>,
+            mut query: Query<(&mut MonsterMovement, &Transform)>,
             time: Res<Time>
         ) {
             for (mut monster, transform) in &mut query {
@@ -168,7 +183,7 @@ impl Plugin for MonstersPlugin {
 
 
         fn monster_movement(
-            mut query: Query<(&mut TargetPos, &mut Monster, &mut Transform)>,
+            mut query: Query<(&mut TargetPos, &mut MonsterMovement, &mut Transform)>,
             map: Res<Map>
         ) {
             for (mut target_pos, mut monster, mut transform) in &mut query {

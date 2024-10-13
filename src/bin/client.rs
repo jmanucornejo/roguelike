@@ -1,16 +1,12 @@
 
 use avian3d::math::Scalar;
-use avian3d::prelude::Collider;
-use avian3d::prelude::RigidBody;
 use avian3d::prelude::*;
-use bevy::audio::AudioPlugin;
 use bevy_atmosphere::plugin::*;
 use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
-use pathfinding::prelude::astar;
-use pathing::*;
 use client_plugins::interpolation::*;
+use client_plugins::pointer::*;
 use client_plugins::client_clock_sync::*;
 use client_plugins::shared_resources::*;
 
@@ -40,6 +36,9 @@ struct ControlledPlayer;
 #[derive(Component)]
 struct Billboard;
 
+#[derive(Component)]
+struct Hovered;
+
 #[derive(Default, Resource, )]
 struct NetworkMapping(HashMap<Entity, Entity>);
 
@@ -59,12 +58,22 @@ struct ClientLobby {
 struct CurrentClientId(u64);
 
 
-#[derive(Component)]
-struct Target;
+
 
 
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
+
+
+
+
+#[derive(AssetCollection, Resource, Debug)]
+struct SealAssets {
+    #[asset(texture_atlas_layout(tile_size_x = 64, tile_size_y = 67, columns = 8, rows = 8, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 0))]
+    layout: Handle<TextureAtlasLayout>,
+    #[asset(path = "spritesheets/monsters/seal.png")]
+    sprite: Handle<Image>,    
+}
 
 
 #[derive(AssetCollection, Resource)]
@@ -99,17 +108,12 @@ struct SkyboxAssets {
 
 #[derive(AssetCollection, Resource)]
 struct ChaskiAssets {
-    #[asset(texture_atlas_layout(tile_size_x = 54, tile_size_y = 129, columns = 8, rows = 1, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 40))]
+    #[asset(texture_atlas_layout(tile_size_x = 128, tile_size_y = 128, columns = 8, rows = 1, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 0))]
     layout: Handle<TextureAtlasLayout>,
-    #[asset(path = "chasqui-spritesheet.png")]
+    #[asset(path = "spritesheets/chasqui_front_walk.png")]
     sprite: Handle<Image>,
 }
 
-#[derive(AssetCollection, Resource)]
-struct GridTarget {
-    #[asset(path = "grid-transparent.png")]
-    sprite: Handle<Image>,
-}
 
 fn main() {
     let mut app: App = App::new();
@@ -133,7 +137,8 @@ fn main() {
                 .continue_to_state(AppState::InGame)
                 .load_collection::<MyAssets>()
                 .load_collection::<PigAssets>()
-                .load_collection::<GridTarget>()
+                .load_collection::<SealAssets>()
+           
                 .load_collection::<ChaskiAssets>()
                 .load_collection::<SkyboxAssets>()
         )
@@ -165,13 +170,13 @@ fn main() {
             InterpolationPlugin, 
             ClientClockSyncPlugin,
             client_plugins::music::MusicPlugin, 
+            client_plugins::pointer::PointerPlugin, 
         ))
         // .add_plugins(PathingPlugin)
-        .add_systems(OnEnter(AppState::InGame), ((setup_target)))
+      
         .add_systems(Update, 
             (
                
-                update_cursor_system.run_if(in_state(AppState::InGame)),
                 // print_hits.run_if(in_state(AppState::InGame)).after(update_cursor_system),
                 player_input.run_if(in_state(AppState::InGame)),             
                 //camera_zoom.run_if(in_state(AppState::InGame)),
@@ -190,6 +195,7 @@ fn main() {
                 // client_sync_entities.run_if(in_state(AppState::InGame)),
                 //click_move_players_system.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
+                sprite_movement.run_if(in_state(AppState::InGame)),
 
             )
         );
@@ -304,6 +310,7 @@ fn client_sync_players(
     assets            : Res<MyAssets>,
     chaski            : Res<ChaskiAssets>,
     pig_assets            : Res<PigAssets>,
+    seal_assets            : Res<SealAssets>,
     mut sprite_params : Sprite3dParams,       
     mut entities: Query<(Entity, &Transform, &mut PositionHistory)>, 
     mut server_time_res: ResMut<ServerTime>,
@@ -336,6 +343,9 @@ fn client_sync_players(
                         }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()), Name::new("Player"),
                         //Collider::capsule(0.4, 1.0),
                         //RigidBody::Dynamic     
+                        Collider::capsule(0.4, 1.0),
+                        //Mass(5.0),
+                        RigidBody::Kinematic   
                     ),
                         
                 );
@@ -422,7 +432,7 @@ fn client_sync_players(
                     )
                 );       
 
-                monster_entity
+                monster_entity                
                     .insert(Billboard)
                     .insert(Velocity::default())
                     .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
@@ -436,10 +446,62 @@ fn client_sync_players(
                 });*/
                 network_mapping.0.insert(entity, monster_entity.id());
             },
-            ServerMessages::MoveDelta { entity, x, y,z, rotation, server_time} => {
+            ServerMessages::SpawnEntity { entity, sprite_id, translation , facing} => {    
+           
+                let texture_atlas: TextureAtlas =  TextureAtlas {
+                    layout: seal_assets.layout.clone(),
+                    index: 58,
+                };
+
+                let mut client_entity = commands.spawn((
+                    Sprite3d {
+                        image: seal_assets.sprite.clone(),
+                        pixels_per_metre: 25.,
+                        alpha_mode: AlphaMode::Blend,
+                        unlit: true,
+                        transform: Transform::from_translation(translation.into()),
+                        // pivot: Some(Vec2::new(0.5, 0.5)),
+        
+                        ..default()
+                    }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
+                    MonsterKind::Pig,
+                    Collider::capsule(0.4, 1.0),
+                    //Mass(5.0),
+                    Monster {
+                        hp: 100,
+                        kind: MonsterKind::Pig 
+                    },
+                    RigidBody::Kinematic,   
+                    Name::new("Pig")
+                    )
+                );       
+
+                println!("PIG SPAWNED AT  {:?} ", translation);
+
+                client_entity
+                    .insert(Billboard)
+                    .insert(Velocity::default())
+                    .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
+                    .insert(Facing(0));
+
+                /*let client_entity = commands.spawn(PbrBundle {
+                    mesh: sprite_params.meshes.add(Mesh::from(Sphere::new(0.1))),
+                    material: sprite_params.materials.add(Color::srgb(1.0, 0.0, 0.0)),
+                    transform: Transform::from_translation(translation.into()),
+                    ..Default::default()
+                });*/
+                network_mapping.0.insert(entity, client_entity.id());
+            },
+            ServerMessages::DespawnEntity { entity } => {
+                println!("Entity despawned {:?} ", entity);
+                if let Some(entity) = network_mapping.0.remove(&entity) {
+                    commands.entity(entity).despawn();
+                }
+            }
+            ServerMessages::MoveDelta { entity, x, y,z, server_time} => {
                 //println!("Message received  {} ", server_time);
                 //println!("server_entity {} ", entity);
-                println!("network_mapping {:?} ", network_mapping.0);
+                //  println!("network_mapping {:?} ", network_mapping.0);
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
 
                     //println!("client_entity {} ", client_entity);
@@ -461,7 +523,7 @@ fn client_sync_players(
 
 }
 
-fn client_sync_entities(
+/*fn client_sync_entities(
     mut commands: Commands,
     //mut meshes: ResMut<Assets<Mesh>>,
    // mut materials: ResMut<Assets<StandardMaterial>>,
@@ -585,7 +647,7 @@ fn client_sync_entities(
 
         } 
     }
-}
+}*/
 
 
 
@@ -707,132 +769,35 @@ fn camera_follow(
 
 
 
-fn setup_target(mut commands: Commands,
-    assets            : Res<GridTarget>,
-    mut meshes: ResMut<Assets<Mesh>>, 
-    mut materials: ResMut<Assets<StandardMaterial>>) {
-
-    let texture = assets.sprite.clone();
-        /*
-    commands.spawn(SpriteBundle {
-        material: materials.add(texture.into()),
-        ..Default::default()
-    }))*/
-
-            
-        /*image: assets.sprite.clone(),
-        pixels_per_metre: 32.,
-        alpha_mode: AlphaMode::Blend,
-        unlit: true,*/
-
-    commands
-        .spawn((PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid::new(1., 0., 1.))),
-            //material: materials.add(Color::srgb(1.0, 0.0, 0.0)),
-            //material: materials.add((texture, alpha_mode: )),
-            material:  materials.add(StandardMaterial {
-                base_color_texture: Some(texture),
-                //unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                ..Default::default()
-            }),
-            transform: Transform::from_xyz(0.0, 1., 0.0),
-            ..Default::default()
-        },
-        NotShadowCaster, 
-        Name::new("Target")))
-        .insert(Target);
-
-   
-}
-
-
-fn update_cursor_system(
-    primary_window: Query<&Window, With<PrimaryWindow>>,
-    mut target_query: Query<&mut Transform, With<Target>>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
-    spatial_query: SpatialQuery
-) {
-    let (camera,camera_transform) = camera_query.single();
-    
-    let mut target_transform = target_query.single_mut();
-    if let Some(cursor_pos) = primary_window.single().cursor_position() {
-
-        if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-
-            let cam_transform = camera_transform.compute_transform();
-            let direction = ray.direction;
-            
-          
-            if let Some(first_hit) = spatial_query.cast_ray(
-                cam_transform.translation,                    // Origin
-                direction,                       // Direction
-                Scalar::MAX,                         // Maximum time of impact (travel distance)
-                true,                          // Does the ray treat colliders as "solid"
-                SpatialQueryFilter::default(), // Query filter
-            ) {
-                //println!("First hit: {:?}", first_hit);
-                /*println!(
-                    "Hit entity {:?} at {} with normal {}",
-                    first_hit.entity,
-                    ray.origin + *ray.direction * first_hit.time_of_impact,
-                    first_hit.normal,
-                );*/
-
-                let mut translation = ray.origin + *ray.direction * first_hit.time_of_impact;
-                translation.x = translation.x.round();
-                translation.z = translation.z.round();
-                translation.y =  translation.y + 0.1; 
-                target_transform.translation = translation;
-
-                
-            }
-
-            /*let mut hits = vec![];
-
-            // Cast ray and get all hits
-            spatial_query.ray_hits_callback(
-                cam_transform.translation,                    // Origin
-                direction,                       // Direction
-                1000.0,                         // Maximum time of impact (travel distance)
-                true,                          // Does the ray treat colliders as "solid"
-                SpatialQueryFilter::default(), // Query filter
-                |hit| {                        // Callback function
-                    hits.push(hit);
-                    true
-                },
-            );
-
-            // Print hits
-            for hit in hits.iter() {
-                println!("Hit: {:?}", hit);
-            }*/
-
-        
-          
-            /*if let Some(distance) = ray.intersect_plane(Vec3::Y, InfinitePlane3d::new(Vec3::Y)) {
-                //info!("Ray {:?}!", ray.direction * distance + ray.origin );
-                let mut translation = ray.direction * distance + ray.origin;
-                translation.x = translation.x.round();
-                translation.z = translation.z.round();
-                target_transform.translation = translation;
-            }*/
-        }
-    }
-}
-
-
 fn sprite_movement(
-    mut query: Query<(&mut Velocity, &mut TextureAtlas)>,
+    time: Res<Time>,
+    mut query: Query<( &mut AnimationTimer, &mut Velocity, &mut TextureAtlas)>,
 
 ) {    
-    for (mut velocity, mut atlas) in &mut query {
-        info!("atlas {:?}!", atlas );
-        atlas.index = if atlas.index == 4 {
-            1
-        } else {
-            atlas.index + 1
-        };
+    for (mut timer, mut velocity, mut atlas) in &mut query {
+
+        if velocity.0 == Vec3::ZERO {
+            continue;
+        }       
+       
+        if(velocity.0.z < 0.) {
+            timer.tick(time.delta());
+            if timer.just_finished() {
+                atlas.index = if atlas.index == 7 {
+                    0
+                } else {
+                    atlas.index + 1
+                };
+            }
+            //info!("atlas {:?}!", atlas );
+            /*atlas.index = if atlas.index == 4 {
+                1
+            } else {
+                atlas.index + 1
+            };*/
+        }
+
+      
     }
 }
 

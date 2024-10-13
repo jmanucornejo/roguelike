@@ -9,8 +9,10 @@ Mapa
 [ ] Edificios
 [ ] Límite exterior del mapa
 [X] Grid en el piso 
+[ ] Crear un segundo mapa
 [ ] Cambiar de un mapa a otro
 [ ] No caminar a una celda donde ya hay alguien 
+
 
 Client
 [X] Zoom la camara con scrollwheel

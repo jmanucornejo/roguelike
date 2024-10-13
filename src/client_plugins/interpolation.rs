@@ -155,7 +155,7 @@ impl Plugin for InterpolationPlugin {
             client_time: Res<Time>,
             clock_offset: Res<ClockOffset>,
             mut prev_clock: ResMut<PrevClock>,
-            mut query: Query<(&mut PositionHistory, &mut Transform)>,
+            mut query: Query<(&mut PositionHistory, &mut Transform, &mut Velocity)>,
         ) {
 
             if( server_time_res.0 == 0) {
@@ -171,7 +171,7 @@ impl Plugin for InterpolationPlugin {
             let target_time =  client_time.elapsed().as_millis() + clock_offset.0 - INTERPLOATE_BUFFER; 
           
 
-            for (mut history, mut transform) in query.iter_mut() {
+            for (mut history, mut transform, mut velocity) in query.iter_mut() {
             
                 if let Some(interpolated_position) = history.interpolate_delta_positions(target_time) {
                     //println!("prev_clock.0 {:?}", prev_clock.0);
@@ -182,11 +182,15 @@ impl Plugin for InterpolationPlugin {
                      
                  
                     let diff = transform.translation - interpolated_position;
-                    let speed = diff.x / (target_time - prev_clock.0) as f32;        
+                    velocity.0 = diff / (target_time - prev_clock.0) as f32;    
+                    //let speed = diff.x / (target_time - prev_clock.0) as f32;        
                     prev_clock.0 = target_time;      
-                    println!("velocidad {:?}, transform {:?}, targettime {:?}", speed, interpolated_position, target_time);
+                    //println!("velocidad {:?}, transform {:?}, targettime {:?}", speed, interpolated_position, target_time);
                     transform.translation = interpolated_position;
                     continue;
+                }
+                else {
+                    velocity.0 = Vec3::ZERO;    
                 }
             }
         }

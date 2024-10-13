@@ -89,8 +89,7 @@ fn main() {
             )
         )
         .add_systems(
-            FixedUpdate, (
-                // server_network_sync,      
+            FixedUpdate, ( 
                 //server_network_sync_player_out,    
                 network_send_delta_position_system.after(roguelike::pathing::apply_velocity_system),      
                 click_move_players_system,
@@ -173,6 +172,7 @@ fn server_events(
                     // info!("entity {:?}", entity);
 
                     // Initialize monsters for this new client
+                    /* 
                     if let Ok( (entity, monster,  monster_transform)) = monsters.get(entity.expect("No entity")) {
 
                         let message = bincode::serialize(&ServerMessages::SpawnMonster {
@@ -184,7 +184,7 @@ fn server_events(
                         .unwrap();
                         server.send_message(*client_id, ServerChannel::ServerMessages, message);
                     }
-
+                    */
                     // Initialize Players for this new client
                     if let Ok( (entity, player,  player_transform)) = players.get(entity.expect("No entity")) {
 
@@ -430,17 +430,6 @@ fn projectile_on_removal_system(mut server: ResMut<RenetServer>, mut removed_pro
 }
 
 
-#[allow(clippy::type_complexity)]
-fn server_network_sync(mut server: ResMut<RenetServer>, query: Query<(Entity, &Transform), Or<(With<Player>, With<Projectile>, With<Monster>)>>) {
-    let mut networked_entities = NetworkedEntities::default();
-    for (entity, transform) in query.iter() {
-        networked_entities.entities.push(entity);
-        networked_entities.translations.push(transform.translation.into());
-    }
-
-    let sync_message = bincode::serialize(&networked_entities).unwrap();
-    server.broadcast_message(ServerChannel::NetworkedEntities, sync_message);
-}
 
 
 #[allow(clippy::type_complexity)]
@@ -493,34 +482,33 @@ fn server_network_sync_player_out(
 pub fn network_send_delta_position_system(
     mut server: ResMut<RenetServer>, 
     players: Query<(&Player, &LineOfSight)>,
-    mut query: Query<(Entity, &Transform, &Facing,  &mut PrevState,), Changed<Transform>>,
+    mut entities: Query<(Entity, &Transform, &mut PrevState), Changed<Transform>>,
     time: Res<Time>,
 ) {
     for (player, line_of_sight) in players.iter() {
       
         for entity in line_of_sight.0.iter() {           
 
-            if let Ok( (entity, transform, rotation, mut prev_state)) = query.get_mut(*entity) {
+            if let Ok( (entity, transform, mut prev_state)) = entities.get_mut(*entity) {
                 
                 let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
                 let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();     
                 
                 //println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                 //delta_translation != IVec3::ZERO
-                if &prev_state.rotation != rotation 
-                || delta_translation.x != 0 
+                if //&prev_state.rotation != rotation ||
+                 delta_translation.x != 0 
                 || delta_translation.z != 0 
                 || delta_translation.y.abs() > 5 // La gravedad hace que se mueva poquito y no queremos madnar 100000 de packets
                 {       
-                    println!("translation Y {:?} . servertie  {:?}",delta_translation.y , time.elapsed().as_millis());   
-                //if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO  {                                  
+                    //println!("translation Y {:?} . servertie  {:?}",delta_translation.y , time.elapsed().as_millis());   
+                    //if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO  {                                  
                     //println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                     let message= ServerMessages::MoveDelta {
                         entity,
                         x: delta_translation.x,
                         y: delta_translation.y,
-                        z: delta_translation.z,
-                        rotation: rotation.clone(),
+                        z: delta_translation.z,                      
                         server_time: time.elapsed().as_millis()
                     };
 
@@ -536,22 +524,23 @@ pub fn network_send_delta_position_system(
     }
     
     // posteriormente, se actualiza las ubicaciones antiguas de las entidades.
-    for (_entity, transform, rotation, mut prev_state) in query.iter_mut() {
+    for (_entity, transform, mut prev_state) in entities.iter_mut() {
         
         //println!("Se actualiza prev state  {:?}",transform.translation);   
         prev_state.translation = transform.translation;
-        prev_state.rotation = rotation.clone();
+        //prev_state.rotation = rotation.clone();
     }
 }
 
 
 
-
 pub fn line_of_sight(
-    mut players: Query<(&Transform, &mut LineOfSight), With<Player>>,
-    treeaccess: Res<NNTree>
+    mut server: ResMut<RenetServer>, 
+    mut players: Query<(&Player, &Transform, &mut LineOfSight), With<Player>>,
+    treeaccess: Res<NNTree>, 
+    entities: Query<(Entity, &Transform, &SpriteId, &Facing)>,
 ) {
-    for (transform, mut line_of_sight) in players.iter_mut() {
+    for (player, transform, mut line_of_sight) in players.iter_mut() {
 
         let within_distance = treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT);
 
@@ -562,17 +551,37 @@ pub fn line_of_sight(
             continue;
         }      
 
-
         let old_set: HashSet<Entity> = line_of_sight.0.iter().cloned().collect();
         let new_set: HashSet<Entity> = entities_within_distance.iter().cloned().collect();
 
         let added: Vec<Entity> = new_set.difference(&old_set).cloned().collect();
-        let removed: Vec<Entity> = old_set.difference(&new_set).cloned().collect();
-
+        let removed: Vec<Entity> = old_set.difference(&new_set).cloned().collect();        
         
-        println!("Added: {:?}", added);     // Output: Added: ["date"]
-        println!("Removed: {:?}", removed);
+        println!("Entered line of sight: {:?}", added);     // Output: Added: ["date"]
+        println!("Left line of sight: {:?}", removed);
 
+       // Spawn all added entities into line of sight
+        for (spawned_entity) in added.iter() {
+
+            if let Ok( (entity, transform, sprite_id, facing)) = entities.get(*spawned_entity) {
+
+                let message = bincode::serialize(&ServerMessages::SpawnEntity {
+                    entity: entity,
+                    sprite_id: sprite_id.clone(),
+                    translation: transform.translation.into(),
+                    facing: facing.clone()
+                })
+                .unwrap();
+                server.send_message(player.id, ServerChannel::ServerMessages, message);
+        
+            }
+        }
+
+        // Despawn all removed entities from line of sight
+        for (despawned_entity) in removed.iter() {
+            let message = bincode::serialize(&ServerMessages::DespawnEntity { entity: *despawned_entity }).unwrap();
+            server.send_message(player.id, ServerChannel::ServerMessages, message);              
+        }        
 
         line_of_sight.0 = entities_within_distance;              
       
