@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::*;
 use std::collections::VecDeque;
 use std::ops::Mul;
-use client_plugins::shared_resources::*;
+use client_plugins::shared::*;
 
 pub const INTERPLOATE_BUFFER: u128 = 100;
 

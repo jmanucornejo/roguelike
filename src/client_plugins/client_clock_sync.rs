@@ -1,7 +1,7 @@
 use std::ops::Mul;
 use bevy::prelude::*;
 use crate::*;
-use client_plugins::shared_resources::*;
+use client_plugins::shared::*;
 
 #[derive(Default, Resource)]
 struct SyncData {

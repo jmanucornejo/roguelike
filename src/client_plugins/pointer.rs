@@ -1,6 +1,7 @@
 use avian3d::math::Scalar;
 use bevy::{pbr::NotShadowCaster, prelude::*, window::PrimaryWindow};
 use bevy_asset_loader::prelude::*;
+use client_plugins::shared::*;
 use crate::*;
 
 
@@ -17,7 +18,8 @@ pub struct Target;
 #[derive(Component)]
 struct GameCursor 
 {
-    action: CursorKind
+    action: CursorKind,
+    hovered_entity: Option<Entity>
 }
 
 #[derive(PartialEq, Debug)]
@@ -44,6 +46,7 @@ impl Plugin for PointerPlugin {
             .add_systems(OnEnter(AppState::InGame), ((setup_target)))
             .add_systems(Update, (  
                     move_cursor.run_if(in_state(AppState::InGame)),
+                    player_input.run_if(in_state(AppState::InGame)),        
                     update_cursor_system.run_if(in_state(AppState::InGame)),
                     changed_cursor.run_if(in_state(AppState::InGame)).after(setup_cursor),
                 )
@@ -107,18 +110,22 @@ impl Plugin for PointerPlugin {
 
                         let mut game_cursor: Mut<'_, GameCursor> = cursor.single_mut();
                       
-                        if let Ok((interactive_entity)) = interactive_entities.get(first_hit.entity) {
-                            //println!("First hit: {:?}", first_hit);
-
-                            //println!("Cursor {:?}", game_cursor.action);
-                            if(game_cursor.action != CursorKind::Attack) {
-                              //  println!("Cambio el cursor ");
-                                game_cursor.action = CursorKind::Attack;
-                            }
+                        if let Ok((interactive_entity)) = interactive_entities.get(first_hit.entity) {                            
+                      
+                            if(Some(interactive_entity) != game_cursor.hovered_entity) {
+                                game_cursor.hovered_entity = Some(interactive_entity);
+                            }                          
                            
+                            if(game_cursor.action != CursorKind::Attack) {
+                                game_cursor.action = CursorKind::Attack;
+                            }                           
                         }
                         else {
                            // println!("No le dimos a nada.Frist hit {:?}", first_hit.entity);
+                            if(game_cursor.hovered_entity != None) {
+                                game_cursor.hovered_entity = None;
+                            }
+                            
                             if(game_cursor.action != CursorKind::Default) {
                                 game_cursor.action = CursorKind::Default;
                             }
@@ -175,14 +182,14 @@ impl Plugin for PointerPlugin {
         }
 
         fn changed_cursor(
-            mut cursor: Query<(&GameCursor, &mut UiImage), (With<GameCursor>,Changed<GameCursor>)>,
+            mut cursors: Query<(&GameCursor, &mut UiImage), (With<GameCursor>,Changed<GameCursor>)>,
             asset_server: Res<AssetServer>,
         ) {
             //let game_cursor = cursor.get_single_mut();
 
-            if let Ok((game_cursor, mut img)) =  cursor.get_single_mut() {
-                println!("Cambio el cursor ");
-                match game_cursor.action {
+            if let Ok((cursor, mut img)) =  cursors.get_single_mut() {
+                println!("Changed cursror");
+                match cursor.action {
                     CursorKind::Default => img.texture = asset_server.load("cursors/PNG/01.png").into(),
                     CursorKind::Attack => img.texture = asset_server.load("cursors/PNG/05.png").into(),
                     CursorKind::Cast => img.texture = asset_server.load("cursors/PNG/05.png").into(),     
@@ -221,7 +228,8 @@ impl Plugin for PointerPlugin {
                     ..default()
                 },
                 GameCursor {
-                    action: CursorKind::Default
+                    action: CursorKind::Default,
+                    hovered_entity: None
                 }
             ));
         }
@@ -236,6 +244,90 @@ impl Plugin for PointerPlugin {
                 img_style.top = Val::Px(position.y);
             }
         }
+
+        
+        fn player_input(
+            keyboard_input: Res<ButtonInput<KeyCode>>,
+            mut player_input: ResMut<PlayerInput>,
+            mouse_button_input: Res<ButtonInput<MouseButton>>,
+            target_query: Query<&Transform, With<Target>>,
+            mut player_commands: EventWriter<PlayerCommand>,
+            mut commands: Commands,
+            player_entities: Query<Entity, With<ControlledPlayer>>,
+            mut cursors: Query<&GameCursor>,
+            mut network_mapping: ResMut<NetworkMapping>,
+            //interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
+
+        ) {
+            player_input.left = keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft);
+            player_input.right = keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight);
+            player_input.up = keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp);
+            player_input.down = keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown);
+
+            if mouse_button_input.just_pressed(MouseButton::Left) {
+
+                if let Ok((cursor)) =  cursors.get_single_mut() {
+                  
+                    match cursor.action {
+                        CursorKind::Default => {
+
+                            let target_transform = target_query.single();
+
+                            let mut move_translation = target_transform.translation;
+                            move_translation.x = move_translation.x.round();
+                            move_translation.z = move_translation.z.round();
+            
+                            player_input.destination_at = Some(Pos(move_translation.x as i32, move_translation.z as i32));
+            
+                            if let Ok(player_entity) = &player_entities.get_single() {
+                                info!("Hay un player entity: {:?}!", player_entity );
+                                commands.entity(*player_entity).insert(PlayerCommand::Move {
+                                    destination_at: move_translation,
+                                });
+                            }      
+            
+                            player_commands.send(PlayerCommand::Move {
+                                destination_at: move_translation,
+                            });
+                        },
+                        CursorKind::Attack => {
+                            info!("Attack: {:?}!", cursor.hovered_entity );
+                            if let Some(hovered_entity) = cursor.hovered_entity {
+
+                                info!("Hay un hovered entity: {:?}!", hovered_entity );
+                                let server_entity = network_mapping.0.iter()
+                                .find_map(|(key, &val)| if val == hovered_entity { Some(key) } else { None });
+
+                                info!("server entity: {:?}!", server_entity );
+                                if let Some((server_entity)) = server_entity {
+
+                                    player_commands.send(PlayerCommand::BasicAttack {
+                                        entity: *server_entity,
+                                    });
+                                  
+
+                                }
+
+                               
+                            
+                            }                         
+                          
+                        },
+                        CursorKind::Cast => {
+                            let target_transform = target_query.single();
+
+                            player_commands.send(PlayerCommand::Cast {
+                                cast_at: target_transform.translation,
+                            });
+                        },     
+                    }
+                }
+
+
+               
+            }
+        }
+
 
     }
 }

@@ -25,7 +25,8 @@ impl Plugin for PathingPlugin {
             .add_systems(
             FixedUpdate, (                   
                     get_velocity,
-                    apply_velocity_system.after(get_velocity)
+                    apply_velocity_system.after(get_velocity),
+                    walking_system
                     //client_velocity.run_if(in_state(AppState::InGame)),
                 )
             );
@@ -41,15 +42,89 @@ impl Plugin for PathingPlugin {
         
         }
 
-        
-        fn get_velocity(
-            mut query: Query<(&mut Transform, &mut TargetPos, &mut Velocity)>,
+        pub fn walking_system(
+            mut walking_entities: Query<(Entity, &Transform,  &mut Walking)>,
+            mut commands: Commands,
+            map: Res<Map>
+        ) {
+            for (entity, transform,  mut walking) in walking_entities.iter_mut() {       
+
+                /*info!("1. Ta parado en: {:?},  {:?}", Pos(
+                    transform.translation.x.round() as i32, 
+                    transform.translation.z.round() as i32
+                ),  transform.translation);
+                info!("2. Ta lejos. Acercarse!, path: {:?}", walking.path);*/
+
+                if let Some((steps_vec, steps_left)) = walking.path.clone() {
+
+                    let current_cell_index: Option<usize>  =  steps_vec.iter().position(|&r| r ==  Pos(
+                        transform.translation.x.round() as i32, 
+                        transform.translation.z.round() as i32
+                    ));
+
+                    //info!("3. current_cell_index: {:?}", current_cell_index);
+                    if let Some(current_index) = current_cell_index {
+
+                        let target_cell_index: usize = steps_left.try_into().expect("No se puedo cambiar de 32 bit a lo necesario");
+
+                        // Aún no llega al mínimo requerido para validar ataque.
+                        if(current_index < target_cell_index) {                        
+
+                            if let Some(next_pos) = steps_vec.get(current_index+1) {
+                                //info!("4. Final Pos: {:?}!", next_pos);    
+                                // Se cambia el punto objetivo.
+                                commands.entity(entity).insert(TargetPos {
+                                    position: Vec3 { x: next_pos.0 as f32, y: 2.0, z: next_pos.1 as f32},
+                                });         
+                            }
+            
+                        }
+                        else {
+                            // Llegó al destino
+                            commands.entity(entity).remove::<Walking>(); 
+                        }
+
+                    }                            
+                    /*else if let Some(goal) = steps_vec.last()  {
+                        info!("3 Se salió del camino!!");                        
+                        walking.path = get_path_between_translations(transform.translation,  Vec3 { x: goal.0 as f32, y: 2.0, z: goal.1 as f32}, &map);    
+
+                        if let Some((steps_vec, steps_left)) = walking.path.clone() {
+
+                            let mut index = 1;
+                    
+                            if(steps_left == 0) {
+                                index = 0;
+                            }   
+                    
+                            if let Some(next_pos) = steps_vec.get(index) {
+
+                                commands.entity(entity).insert(TargetPos {
+                                    position: Vec3 { x: next_pos.0 as f32, y: 2.0, z: next_pos.1 as f32},
+                                });                               
+                         
+                            }
+                           
+                        }   
+                             
+                    }
+                    else {
+                        panic!("Oh no something bad has happened!")
+                    }*/
+                }
+            }  
+        }
+
+        pub fn get_velocity(
+            mut query: Query<(&Transform, &mut TargetPos, &mut Velocity)>,
 
         ) {
             for (mut transform, state,  mut velocity) in &mut query {
-                if(transform.translation  != state.position) {
+                if(transform.translation.x  != state.position.x || transform.translation.z  != state.position.z ) {
+                    //info!("state.position {:?}!", state.position);
                     velocity.0 = calculate_velocity(transform.translation, state.position);
-                }      
+                }    
+              
             }
         }
 
@@ -73,11 +148,11 @@ pub fn apply_velocity_system(mut query: Query<(&Velocity, &mut Transform, &Targe
             //info!("diff  {:?}!", diff);
             let diff = velocity.0 * time.delta_seconds();
             //info!("diff  {:?}!", diff);
-            //info!("velocity {:?}, diff  {:?}!",velocity.0, diff);
+            
             if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {
                 transform.translation.x = target_pos.position.x;
             }
-            else if target_pos.position.x <= transform.translation.x &&  transform.translation.x + diff.x <= target_pos.position.x {
+            else if target_pos.position.x <= transform.translation.x &&  transform.translation.x + diff.x <= target_pos.position.x {               
                 transform.translation.x = target_pos.position.x;
             }
             else {
@@ -165,6 +240,27 @@ pub fn get_astar_successors(current_pos: &Pos, map: &Res<Map>) -> Vec<(Pos, u32)
 
 }
 
+pub fn get_path_between_translations(origin_translation: Vec3, destination_translation: Vec3, map: &Res<Map>) -> Option<(Vec<Pos>, u32)> {
+
+    let start: Pos = Pos(
+        origin_translation.x.round() as i32, 
+        origin_translation.z.round() as i32
+    );
+
+    let goal: Pos = Pos(
+        destination_translation.x.round() as i32, 
+        destination_translation.z.round() as i32
+    );    
+
+    let astar_result = astar(
+        &start,
+        |p|  get_astar_successors(p, &map),
+        |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
+        |p| *p==goal);
+
+    return astar_result;
+
+}
 
 fn get_succesors(current_pos: &Pos, mut map: &ResMut<Map>) -> Vec<Pos> {
 
@@ -186,6 +282,7 @@ fn get_succesors(current_pos: &Pos, mut map: &ResMut<Map>) -> Vec<Pos> {
 
 pub fn calculate_velocity(origin: Vec3, destination: Vec3) -> Vec3 {
 
+    // info!("origin: {:?}, destination: {:?}!", origin, destination);   
     let mut velocity: Vec3 = Vec3 {
         x: 0.0,
         y: 0.0,

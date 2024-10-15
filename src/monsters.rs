@@ -61,7 +61,7 @@ impl Plugin for MonstersPlugin {
             .add_systems(
                 FixedUpdate, (
                     monster_movement_timer_reset.run_if(in_state(AppState::InGame)),
-                    monster_movement.run_if(in_state(AppState::InGame)),
+                    // monster_movement.run_if(in_state(AppState::InGame)),
                 )
             )
             
@@ -156,25 +156,32 @@ impl Plugin for MonstersPlugin {
         }     
 
         fn monster_movement_timer_reset(
-            mut query: Query<(&mut MonsterMovement, &Transform)>,
-            time: Res<Time>
+            mut query: Query<(Entity, &mut MonsterMovement, &Transform), With<Monster>>,
+            time: Res<Time>,
+            mut commands: Commands,
+            map: Res<Map>
         ) {
-            for (mut monster, transform) in &mut query {
+            for (mut monster, mut movement, transform) in &mut query {
                 //let (position_old, position, mut transform) = query.single_mut();
                 
-                monster.move_timer.tick(time.delta());
+                movement.move_timer.tick(time.delta());
 
-                if monster.move_timer.finished() {
+                if movement.move_timer.finished() {
                  
-                    monster.move_destination =  Vec3 { 
+                    movement.move_destination =  Vec3 { 
                         x: transform.translation.x.round() + fastrand::i32(-10..10) as f32, 
                         y: 2.0, 
                         z: transform.translation.z.round() + fastrand::i32(-10..10) as f32
                     };                
+                    
 
                     //info!("Se acabó timer. Se mueve monstruo a {:?}", monster.move_destination);
 
-                    monster.move_timer = Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once);
+                    movement.move_timer = Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once);
+
+                    commands.entity(monster).insert(Walking {
+                        path: get_path_between_translations(transform.translation, movement.move_destination, &map),                               
+                    }).remove::<Attacking>(); 
                    
                 }            
            

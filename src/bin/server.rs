@@ -68,7 +68,8 @@ fn main() {
         .add_plugins((
             server_plugins::physics::ServerPhysicsPlugin, 
             MonstersPlugin, 
-            server_plugins::server_clock_sync::ServerClockSyncPlugin
+            server_plugins::server_clock_sync::ServerClockSyncPlugin,
+            server_plugins::combat::CombatPlugin
         ))
         .add_plugins(RenetServerPlugin)
         .insert_resource(RenetServerVisualizer::<200>::new(
@@ -92,7 +93,7 @@ fn main() {
             FixedUpdate, ( 
                 //server_network_sync_player_out,    
                 network_send_delta_position_system.after(roguelike::pathing::apply_velocity_system),      
-                click_move_players_system,
+                //click_move_players_system,
                 line_of_sight
                 //monster_test
             )
@@ -156,8 +157,9 @@ fn server_events(
     treeaccess: Res<NNTree>,
     mut server_visualizer: ResMut<RenetServerVisualizer<200>>,
     time: Res<Time>,
+    map: Res<Map>
 ) {
-
+    
     for event in server_events.read() {
         match event {
             ServerEvent::ClientConnected { client_id } => {
@@ -311,8 +313,8 @@ fn server_events(
         while let Some(message) = server.receive_message(client_id, ClientChannel::Command) {
             let command: PlayerCommand = bincode::deserialize(&message).unwrap();
             match command {
-                PlayerCommand::BasicAttack { mut cast_at } => {
-                    println!("Received basic attack from client {}: {:?}", client_id, cast_at);
+                PlayerCommand::Cast { mut cast_at } => {
+                    println!("Received cast from client {}: {:?}", client_id, cast_at);
 
                     if let Some(player_entity) = lobby.players.get(&client_id) {
                         if let Ok((_, _, player_transform)) = players.get(*player_entity) {
@@ -332,16 +334,37 @@ fn server_events(
                         }
                     }
                 },
+                PlayerCommand::BasicAttack { entity } => {
+                    println!("Received basic attack from client {}: {:?}", client_id, entity);
+                    
+                    if let (Some(player_entity)) = lobby.players.get_mut(&client_id) {
+
+                        if let (Ok((entity, player, player_transform)), Ok((monster_entity, monster,  monster_transform))) = (players.get(*player_entity), monsters.get(entity)) {
+
+                            println!("Player entity {:?} attacking monster_entitry {:?}", player_entity, monster_entity);
+                            commands.entity(*player_entity).insert(Attacking {
+                                enemy: monster_entity,
+                                auto_attack: false,
+                                enemy_translation: monster_transform.translation,
+                                path: get_path_between_translations(player_transform.translation, monster_transform.translation, &map),
+                               
+                           }).remove::<Walking>(); ;
+                        }
+                    }              
+                   
+                },
                 PlayerCommand::Move { mut destination_at } => {
                     println!("Received move action from client {}: {:?}", client_id, destination_at);
 
+                
                     if let Some(mut player_entity) = lobby.players.get_mut(&client_id) {
-
-                   
-                        /*if let Ok((_, _, player_transform)) = players.get_mut(*player_entity) {
-                            player_transform.translation = destination_at;
-                        }*/
-                        commands.entity(*player_entity).insert(command);
+            
+                        if let Ok((entity, player, player_transform)) = players.get(*player_entity) {
+                            commands.entity(*player_entity).insert(Walking {
+                                path: get_path_between_translations(player_transform.translation, destination_at, &map),                               
+                            }).remove::<Attacking>(); 
+                        }   
+                       
                     }
 
                
@@ -378,8 +401,6 @@ fn click_move_players_system(
     for (mut velocity, command, mut transform, entity) in query.iter_mut() {
         match command {
             PlayerCommand::Move { destination_at } => {  
-
-
               
                 /*let start: Pos = Pos(
                     transform.translation.x.round() as i32, 
@@ -393,7 +414,7 @@ fn click_move_players_system(
                 let target = get_next_step(transform.translation.into(), goal, &map); 
 
                 if let Some(final_pos) = target {    
-
+                    println!("final_post click {:?}",final_pos);
                     //info!("Final Pos: {:?}!", final_pos);    
                     // Se cambia el punto objetivo.
                     commands.entity(entity).insert(TargetPos {
@@ -557,8 +578,8 @@ pub fn line_of_sight(
         let added: Vec<Entity> = new_set.difference(&old_set).cloned().collect();
         let removed: Vec<Entity> = old_set.difference(&new_set).cloned().collect();        
         
-        println!("Entered line of sight: {:?}", added);     // Output: Added: ["date"]
-        println!("Left line of sight: {:?}", removed);
+        //println!("Entered line of sight: {:?}", added);     // Output: Added: ["date"]
+        //println!("Left line of sight: {:?}", removed);
 
        // Spawn all added entities into line of sight
         for (spawned_entity) in added.iter() {

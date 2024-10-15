@@ -118,7 +118,8 @@ pub struct PlayerInput {
 #[derive(Debug, Serialize, Deserialize, Event)]
 pub enum PlayerCommand {
     Move { destination_at: Vec3 },
-    BasicAttack { cast_at: Vec3 },
+    BasicAttack { entity: Entity },
+    Cast { cast_at: Vec3 }
 }
 
 pub enum ClientChannel {
@@ -152,6 +153,19 @@ pub struct Monster {
 pub enum MonsterKind {
     Pig,
     Orc,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+pub struct Attacking {
+    pub enemy: Entity,
+    pub auto_attack: bool,
+    pub enemy_translation: Vec3,
+    pub path: Option<(Vec<Pos>, u32)>
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+pub struct Walking {
+    pub path: Option<(Vec<Pos>, u32)>
 }
 
 #[derive(Debug, Serialize, Deserialize, Component)]

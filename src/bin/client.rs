@@ -8,7 +8,7 @@ use local_ip_address::local_ip;
 use client_plugins::interpolation::*;
 use client_plugins::pointer::*;
 use client_plugins::client_clock_sync::*;
-use client_plugins::shared_resources::*;
+use client_plugins::shared::*;
 
 use roguelike::*;
 
@@ -30,8 +30,6 @@ use bevy::input::common_conditions::input_toggle_active;
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TouchControls};
 
 
-#[derive(Component)]
-struct ControlledPlayer;
 
 #[derive(Component)]
 struct Billboard;
@@ -39,8 +37,6 @@ struct Billboard;
 #[derive(Component)]
 struct Hovered;
 
-#[derive(Default, Resource, )]
-struct NetworkMapping(HashMap<Entity, Entity>);
 
 
 #[derive(Debug)]
@@ -178,7 +174,7 @@ fn main() {
             (
                
                 // print_hits.run_if(in_state(AppState::InGame)).after(update_cursor_system),
-                player_input.run_if(in_state(AppState::InGame)),             
+     
                 //camera_zoom.run_if(in_state(AppState::InGame)),
                 client_send_input.run_if(in_state(AppState::InGame)),              
                 client_send_player_commands.run_if(in_state(AppState::InGame)),
@@ -236,46 +232,6 @@ fn create_renet_transport(app: &mut App)  {
     app.insert_resource(transport);
     app.insert_resource(CurrentClientId(client_id));
 
-}
-
-//fn update_projectiles_system(mut commands: Commands, mut projectiles: Query<(Entity, &mut Projectile)>, time: Res<Time>) {
-fn player_input(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut player_input: ResMut<PlayerInput>,
-    mouse_button_input: Res<ButtonInput<MouseButton>>,
-    target_query: Query<&Transform, With<Target>>,
-    mut player_commands: EventWriter<PlayerCommand>,
-    mut commands: Commands,
-    player_entities: Query<Entity, With<ControlledPlayer>>,
-) {
-    player_input.left = keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft);
-    player_input.right = keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight);
-    player_input.up = keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp);
-    player_input.down = keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown);
-
-    if mouse_button_input.just_pressed(MouseButton::Left) {
-        let target_transform = target_query.single();
-
-        let mut move_translation = target_transform.translation;
-        move_translation.x = move_translation.x.round();
-        move_translation.z = move_translation.z.round();
-
-        player_input.destination_at = Some(Pos(move_translation.x as i32, move_translation.z as i32));
-
-        if let Ok(player_entity) = &player_entities.get_single() {
-            info!("Hay un player entity: {:?}!", player_entity );
-            commands.entity(*player_entity).insert(PlayerCommand::Move {
-                destination_at: move_translation,
-            });
-        }      
-
-        player_commands.send(PlayerCommand::Move {
-            destination_at: move_translation,
-        });
-        player_commands.send(PlayerCommand::BasicAttack {
-            cast_at: target_transform.translation,
-        });
-    }
 }
 
 fn client_send_input(
