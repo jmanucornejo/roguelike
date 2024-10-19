@@ -3,7 +3,7 @@ pub mod monsters;
 pub mod client_plugins;
 pub mod server_plugins;
 
-use avian3d::prelude::*;
+use avian3d::{parry::shape, prelude::*};
 use bevy_spatial::{kdtree::KDTree3};
 use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}};
 use bevy_renet::renet::*;
@@ -168,6 +168,7 @@ pub struct Walking {
     pub path: Option<(Vec<Pos>, u32)>
 }
 
+
 #[derive(Debug, Serialize, Deserialize, Component)]
 pub enum ServerMessages {
     PlayerCreate {
@@ -210,6 +211,9 @@ pub enum ServerMessages {
         entity: Entity,
     },
 }
+
+#[derive(Component, Debug)]
+pub struct MapEntity; 
 
 
 #[derive(Component)]
@@ -305,12 +309,10 @@ pub fn connection_config() -> ConnectionConfig {
 }
 
 
-
 pub fn setup_level(
     mut commands: Commands, 
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>,  
-    mut water_materials: ResMut<Assets<WaterMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
 
@@ -337,6 +339,36 @@ pub fn setup_level(
         ColliderConstructor::TrimeshFromMesh,
         RigidBody::Static,
     ));*/
+
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Mesh::from(Cuboid::new(3., 5., 11.))),
+            //material: material,
+            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
+            transform: Transform::from_xyz(0.0, 0.99, 0.0),
+            ..Default::default()
+        },  
+        Name::new("Wall"),  
+        MapEntity,
+        Collider::cuboid(3., 5., 11.),
+        RigidBody::Static,
+    ));
+
+    
+    /*commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Mesh::from(Cuboid::new(11., 5., 1.))),
+            //material: material,
+            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
+            transform: Transform::from_xyz(1., 0.99, 6.),
+            ..Default::default()
+        },  
+        Name::new("Wall"),  
+        MapEntity,
+        Collider::cuboid(11., 5., 1.),
+        RigidBody::Static,
+    ));*/
+  
   
 
      // Create a plane to represent the water surface
@@ -369,19 +401,46 @@ pub fn setup_level(
         ..default()
     },  Name::new("Water")));*/
 
+    /*
+    let wall_handle = asset_server.load("models/wall_door_-_19mb2.glb#Scene0");
+
+    commands.spawn((      
+        SceneBundle {
+            scene: wall_handle.clone(),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 0.0),
+                scale: Vec3::splat(0.7),
+                //rotation,
+                ..Default::default()
+            },
+            
+            ..Default::default()
+        },
+        Name::new("Wall"),
+        MapEntity,
+        ColliderConstructorHierarchy::new(ColliderConstructor::ConvexDecompositionFromMesh) 
+        )  
+    );*/
 
     let tree_handle = asset_server.load("models/palm_tree.glb#Scene0");
 
-    commands.spawn(SceneBundle {
-        scene: tree_handle.clone(),
-        transform: Transform {
-            translation: Vec3::new(20.0, 0.0, 20.0),
-            scale: Vec3::splat(0.7),
-            //rotation,
+    commands.spawn((      
+        SceneBundle {
+            scene: tree_handle.clone(),
+            transform: Transform {
+                translation: Vec3::new(20.0, 0.0, 20.0),
+                scale: Vec3::splat(0.7),
+                //rotation,
+                ..Default::default()
+            },
+            
             ..Default::default()
         },
-        ..Default::default()
-    });
+        Name::new("Palm tree"),
+        MapEntity,
+        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh) 
+        )  
+    );
 
 
     // Load textures
@@ -412,6 +471,7 @@ pub fn setup_level(
             ..Default::default()
         },
         Name::new("Map"),
+        MapEntity,
         ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
         RigidBody::Static
     ));

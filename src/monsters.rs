@@ -25,7 +25,6 @@ struct TestAssets {
 
 #[derive(Debug, PartialEq, Component, Clone)]
 pub struct MonsterMovement {
-    pub move_destination: Vec3,
     pub move_timer: Timer,
     pub speed: f32,
 }
@@ -99,7 +98,8 @@ impl Plugin for MonstersPlugin {
                             }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),    
                             monster_spawner.monster.clone(),
                             monster_spawner.monster_movement.clone(),
-                            Name::new("Pig")
+                            Name::new("Pig"),
+                            Collider::capsule(0.4, 1.0),
                             )
                         )
                         .insert(Velocity::default())
@@ -143,8 +143,7 @@ impl Plugin for MonstersPlugin {
                             hp: 100,
                             kind: MonsterKind::Pig, 
                         }, 
-                        monster_movement: MonsterMovement {
-                            move_destination: Vec3 { x: pos.0 as f32, y: 2.0, z: pos.1 as f32 },
+                        monster_movement: MonsterMovement {                           
                             move_timer: Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once),
                             speed: 5.0    
                         },
@@ -168,7 +167,7 @@ impl Plugin for MonstersPlugin {
 
                 if movement.move_timer.finished() {
                  
-                    movement.move_destination =  Vec3 { 
+                    let move_destination =  Vec3 { 
                         x: transform.translation.x.round() + fastrand::i32(-10..10) as f32, 
                         y: 2.0, 
                         z: transform.translation.z.round() + fastrand::i32(-10..10) as f32
@@ -180,76 +179,13 @@ impl Plugin for MonstersPlugin {
                     movement.move_timer = Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once);
 
                     commands.entity(monster).insert(Walking {
-                        path: get_path_between_translations(transform.translation, movement.move_destination, &map),                               
+                        path: get_path_between_translations(transform.translation, move_destination, &map),                               
                     }).remove::<Attacking>(); 
                    
                 }            
            
             }
         }
-
-
-        fn monster_movement(
-            mut query: Query<(&mut TargetPos, &mut MonsterMovement, &mut Transform)>,
-            map: Res<Map>
-        ) {
-            for (mut target_pos, mut monster, mut transform) in &mut query {
-                //let (position_old, position, mut transform) = query.single_mut();
-                            
-                //info!("Pig sold for $15! Current Money: ${:?}", target_pos);
-            
-                let goal: Pos = Pos(
-                    monster.move_destination.x as i32, 
-                    monster.move_destination.z as i32
-                );    
-   
-
-                let target = get_next_step(transform.translation.into(), goal, &map); 
-
-                if let Some(final_pos) = target {    
-                    target_pos.position =  final_pos;        
-                }
-               
-
-                /*if((monster.move_destination.x != transform.translation.x || monster.move_destination .z != transform.translation.z) && !map.blocked_paths.contains(&goal)) {                     
-    
-                    info!("Start   {:?}!  Goal  {:?}!", start,goal);
-
-                    //let succesors = get_succesors(&start, &map);                        
-                    let astar_result = astar(
-                        &start,
-                        |p|  get_astar_successors(p, &map),
-                        |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
-                        |p| *p==goal);
-
-
-                    info!("*Star Result {:?}! ",astar_result);    
-
-                
-                    if let Some(result) = astar_result{
-                        let steps_vec = result.0;
-                        let steps_left =  result.1;
-                        let mut index = 1;
-                        if(steps_left == 0) {
-                            index = 0;
-                        }
-                    
-    
-                        if let Some(final_pos) = steps_vec.get(index) {
-                        
-                            let &Pos(x, z) = final_pos;
-
-                            target_pos.position =  Vec3 { x: x as f32, y: 2.0, z: z as f32};
-     
-                        }
-                        
-                    }        
-                    
-                }*/
-
-            }
-        }
-
 
     }   
 }

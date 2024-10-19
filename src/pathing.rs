@@ -19,7 +19,8 @@ impl Plugin for PathingPlugin {
         app
             .add_systems(
             Startup, (
-                    setup_prohibited_areas.after(setup_level),            
+                    setup_prohibited_areas.after(setup_level),           
+                    setup_prohibited_cells.after(setup_level) 
                 )            
             )
             .add_systems(
@@ -30,6 +31,54 @@ impl Plugin for PathingPlugin {
                     //client_velocity.run_if(in_state(AppState::InGame)),
                 )
             );
+
+
+            
+        /*
+        Esto podria pre-hacerse y simplemente dejar el array listo en el mapa. Para ahorrar calcularlo cada vez.. total. El mapa nunca cambia.
+        */
+        pub fn setup_prohibited_cells(
+            map_entities: Query<(&MapEntity, &Handle<Mesh>, &Collider, &Transform)>,
+            mut meshes: ResMut<Assets<Mesh>>,
+            mut map: ResMut<Map>
+        ) {
+            for (map_entity, mesh_handle,  collider,  transform) in map_entities.iter() {
+
+                let mesh = meshes.get_mut(mesh_handle).unwrap();
+
+                let aabb = mesh.compute_aabb();
+
+                if let Some(aabb) = aabb {
+
+                    let starting_point_x = (transform.translation.x - aabb.half_extents.x)+0.5;
+                    let ending_point_x = (transform.translation.x + aabb.half_extents.x)+0.5;
+                    let starting_point_z = (transform.translation.z - aabb.half_extents.z)+0.5;
+                    let ending_point_z = (transform.translation.z + aabb.half_extents.z)+0.5;
+                 
+                    for x in starting_point_x as i32..ending_point_x as i32 {
+                        for z in starting_point_z as i32..ending_point_z as i32 {
+                            let pos = Pos(x,z);                            
+                            if !map.blocked_paths.contains(&pos) {
+                                println!("Se agrega {:?} a blocked paths", pos) ;
+                                map.blocked_paths.push(pos);
+                            }                            
+                        }
+                    }
+                    println!(" blocked paths {:?} ", map.blocked_paths) ;
+                    
+                
+                }
+            
+                /*println!("mesh aabb  {:?}, ",aabb) ;
+            
+                let rotation = Rotation::default();
+
+                let aabb = collider.aabb(transform.translation, *rotation);
+                let range = aabb.min.x;
+                println!("collideraabb  {:?}, ",aabb) ;*/
+                //if(collider.hal)
+            }
+        }
 
 
         pub fn setup_prohibited_areas(mut map: ResMut<Map>, mut buildings: Query<(Entity, &mut Building)>) {
@@ -43,9 +92,9 @@ impl Plugin for PathingPlugin {
         }
 
         pub fn walking_system(
-            mut walking_entities: Query<(Entity, &Transform,  &mut Walking)>,
+            mut walking_entities: Query<(Entity, &Transform,  &mut Walking), With<Player>>,
             mut commands: Commands,
-            map: Res<Map>
+            //map: Res<Map>
         ) {
             for (entity, transform,  mut walking) in walking_entities.iter_mut() {       
 
@@ -180,7 +229,7 @@ pub fn get_astar_successors(current_pos: &Pos, map: &Res<Map>) -> Vec<(Pos, u32)
     let &Pos(x, z) = current_pos;
 
     let blocked_paths = &map.blocked_paths;
-    //info!("blocked_paths   {:?}!", blocked_paths);
+    // info!("blocked_paths   {:?}!", blocked_paths);
 
   
      let mut possible_positions =  vec![];
@@ -251,6 +300,13 @@ pub fn get_path_between_translations(origin_translation: Vec3, destination_trans
         destination_translation.x.round() as i32, 
         destination_translation.z.round() as i32
     );    
+
+    // Tile bloqueado
+    if(map.blocked_paths.contains(&goal)) {
+        println!("Usuario quiere moverse a una celda prohibida.");
+        return None
+    }
+          
 
     let astar_result = astar(
         &start,

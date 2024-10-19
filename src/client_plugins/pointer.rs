@@ -97,7 +97,7 @@ impl Plugin for PointerPlugin {
                 if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
 
                     let cam_transform = camera_transform.compute_transform();
-                    let direction = ray.direction;
+                    let direction: Dir3 = ray.direction;
                     
                 
                     if let Some(first_hit) = spatial_query.cast_ray(
@@ -142,7 +142,7 @@ impl Plugin for PointerPlugin {
                         let mut translation = ray.origin + *ray.direction * first_hit.time_of_impact;
                         translation.x = translation.x.round();
                         translation.z = translation.z.round();
-                        translation.y =  translation.y + 0.1; 
+                        translation.y =  translation.y + 0.15; 
                         target_transform.translation = translation;
 
                         

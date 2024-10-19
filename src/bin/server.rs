@@ -53,7 +53,6 @@ fn main() {
         .add_plugins(PathingPlugin)
         .add_plugins(AutomaticUpdate::<NearestNeighbourComponent>::new())
         .add_plugins(ObjPlugin) 
-        .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(PhysicsPlugins::default())
        // .add_plugins(MinimalPlugins)
         //.add_plugins(LogPlugin::default())
@@ -228,7 +227,7 @@ fn server_events(
                         LockedAxes::ROTATION_LOCKED,
                         //Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
                         //Restitution::ZERO.with_combine_rule(CoefficientCombine::Min), 
-                        Collider::capsule(0.4, 1.0),
+                        Collider::capsule(0.5, 1.0),
                         //Mass(5.0),
                         GravityScale(1.0),
                         RigidBody::Kinematic     
@@ -355,7 +354,6 @@ fn server_events(
                 },
                 PlayerCommand::Move { mut destination_at } => {
                     println!("Received move action from client {}: {:?}", client_id, destination_at);
-
                 
                     if let Some(mut player_entity) = lobby.players.get_mut(&client_id) {
             
