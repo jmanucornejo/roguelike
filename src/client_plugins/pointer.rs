@@ -107,7 +107,7 @@ impl Plugin for PointerPlugin {
                         // The first collider hit has the entity `entity` and it hit after
                         // the ray travelled a distance equal to `ray_dir * time_of_impact`.
                         let hit_point = cam_transform.translation + direction.normalize() * time_of_impact;
-                        println!("Entity {:?} hit at point {}", entity, hit_point);
+                        // println!("Entity {:?} hit at point {}", entity, hit_point);
 
                         let mut game_cursor: Mut<'_, GameCursor> = cursor.single_mut();
                       

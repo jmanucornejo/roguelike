@@ -54,7 +54,7 @@ impl PositionHistory  {
             else if(t1 <= target_timestamp && i+1 == self.buffer.len() - 1 && self.prev_position != self.next_position) {
                 self.prev_position = self.next_position;
                 self.buffer[i + 1] = (delta1, t1, true);
-                println!("Se procesa fin de la cola {:?}, position {:?}", t1, self.next_position);
+                //println!("Se procesa fin de la cola {:?}, position {:?}", t1, self.next_position);
                 
                 return Some(self.next_position);
             }
@@ -62,13 +62,13 @@ impl PositionHistory  {
         
         // Perform interpolation based on the deltas
         if let (Some((delta0, t0, processed0)), Some((delta1, t1, processed1))) = (previous, next) {
-            println!("delta0 {:?}, delta1 {:?}, t0 {:?}, t1 {:?},processed0 {:?}, processed1 {:?}", delta0, delta1, t0, t1, processed0, processed1);
+            //println!("delta0 {:?}, delta1 {:?}, t0 {:?}, t1 {:?},processed0 {:?}, processed1 {:?}", delta0, delta1, t0, t1, processed0, processed1);
 
             let progress = (target_timestamp - t0) as f32 / (t1 - t0) as f32;
 
 
             if(processed0 == false) {
-                println!("NO SE HA PROCESADO LA POSICION PREVIA ");
+                //println!("NO SE HA PROCESADO LA POSICION PREVIA ");
                 self.prev_position = self.prev_position + delta0;     
                 self.next_position = self.prev_position + delta1;   
             }
@@ -79,9 +79,7 @@ impl PositionHistory  {
             
             let current_position = self.prev_position.lerp(self.next_position, progress);
 
-          
-
-            println!("Moved to  {:?} from  {:?} -> {:?} progress {:?} time {:?}",current_position, self.prev_position , self.next_position, progress, target_timestamp);
+            //println!("Moved to  {:?} from  {:?} -> {:?} progress {:?} time {:?}",current_position, self.prev_position , self.next_position, progress, target_timestamp);
 
             return Some(current_position);
         }

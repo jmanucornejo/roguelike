@@ -110,9 +110,9 @@ struct SkyboxAssets {
 
 #[derive(AssetCollection, Resource)]
 struct ChaskiAssets {
-    #[asset(texture_atlas_layout(tile_size_x = 128, tile_size_y = 128, columns = 8, rows = 1, padding_x = 0, padding_y = 50, offset_x = 0, offset_y = 0))]
+    #[asset(texture_atlas_layout(tile_size_x = 128, tile_size_y = 128, columns = 8, rows = 8, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 0))]
     layout: Handle<TextureAtlasLayout>,
-    #[asset(path = "spritesheets/chasqui/chasqui_front_walk.png")]
+    #[asset(path = "spritesheets/chasqui/chasqui.png")]
     sprite: Handle<Image>,
 }
 
@@ -201,7 +201,6 @@ fn main() {
                 
                 client_sync_players.run_if(in_state(AppState::InGame)),
                 draw_player_sprites.run_if(in_state(AppState::InGame)).after(client_sync_players),
-                // client_sync_entities.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
                 sprite_movement.run_if(in_state(AppState::InGame)),
 
@@ -340,7 +339,7 @@ pub fn client_sync_players(
             (
                         PbrBundle {
                             mesh: sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.))),
-                            material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 1.0)),
+                            material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.5)),
                             transform: Transform::from_xyz(translation[0], translation[1], translation[2]),
                             ..Default::default()
                         },  
@@ -563,7 +562,7 @@ pub fn client_sync_players(
             ServerMessages::DespawnEntity { entity } => {
                 println!("Entity despawned {:?} ", entity);
                 if let Some(entity) = network_mapping.0.remove(&entity) {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).despawn_recursive();
                 }
             }
             ServerMessages::MoveDelta { entity, x, y,z, server_time} => {
@@ -596,133 +595,6 @@ pub fn client_sync_players(
     }
 
 }
-
-/*fn client_sync_entities(
-    mut commands: Commands,
-    //mut meshes: ResMut<Assets<Mesh>>,
-   // mut materials: ResMut<Assets<StandardMaterial>>,
-    mut client: ResMut<RenetClient>,
-    client_id: Res<CurrentClientId>,
-    player_entities: Query<Entity, With<ControlledPlayer>>,
-    mut network_mapping: ResMut<NetworkMapping>,
-    assets            : Res<MyAssets>,
-    chaski            : Res<ChaskiAssets>,
-    pig_assets            : Res<PigAssets>,
-    mut sprite_params : Sprite3dParams,       
-) {
-    let client_id = client_id.0;
-
-    while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
-        let server_message = bincode::deserialize(&message).unwrap();
-        match server_message {
-            ServerMessages::PlayerCreate { id, translation, entity , server_time} => {
-                println!("Player {} connected.", id);                     
-           
-                if client_id == id.raw() {
-                    
-                    let texture_atlas = TextureAtlas {
-                        layout: chaski.layout.clone(),
-                        index: 0,
-                    };                    
-
-                    let mut client_entity = commands.spawn((Sprite3d {
-                        image: chaski.sprite.clone(),
-                        pixels_per_metre: 40.,
-                        alpha_mode: AlphaMode::Blend,
-                        unlit: true,
-                        transform: Transform::from_xyz(translation[0], translation[1]+1.0, translation[2]),
-                        // transform: Transform::from_xyz(0., 0., 0.),
-                        // pivot: Some(Vec2::new(0.5, 0.5)),
-    
-                        ..default()
-                    }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()), Name::new("Player")));
-
-                    
-                    client_entity
-                        .insert(ControlledPlayer) 
-                        .insert(Billboard)
-                        .insert(Velocity::default())
-                        .insert(Facing(0) )
-                        .insert(NotShadowCaster)                     
-                        .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
-
-                    network_mapping.0.insert(entity, client_entity.id());
-                }
-
-                
-            },
-            _ => {}
-        
-           
-        }
-    }
-  
-    while let Some(message) = client.receive_message(ServerChannel::NetworkedEntities) {
-        let networked_entities: NetworkedEntities = bincode::deserialize(&message).unwrap();
-
-        for i in 0..networked_entities.entities.len() {
-            if let Some(entity) = network_mapping.0.get(&networked_entities.entities[i]) {
-                // Update entity
-                let mut translation: Vec3 = networked_entities.translations[i].into();
-                translation.y = 2.0;
-
-                let movement_state = TargetPos {
-                    position: translation
-                };
-
-                commands.entity(*entity).insert(movement_state);
-            }
-            else {
-                // Spawn entity
-
-                let texture_atlas: TextureAtlas = TextureAtlas {
-                    layout: pig_assets.layout.clone(),
-                    index: 0,
-                };
-                
-   
-                let mut monster_entity = commands.spawn((
-                    Sprite3d {
-                        image: pig_assets.sprite.clone(),
-                        pixels_per_metre: 24.,
-                        alpha_mode: AlphaMode::Blend,
-                        unlit: true,
-                        transform: Transform::from_translation(networked_entities.translations[i].into()),
-                        // pivot: Some(Vec2::new(0.5, 0.5)),
-        
-                        ..default()
-                    }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
-                    MonsterKind::Pig,
-                    Name::new("Pig")
-                    )
-                );       
-
-                monster_entity
-                    .insert(Billboard)
-                    .insert(Velocity::default())
-                    .insert(Facing(0));
-    
-                network_mapping.0.insert(networked_entities.entities[i], monster_entity.id());
-             
-            }
-        }
-        for (server_entity, client_entity) in network_mapping.0.clone() {
-
-            if let Ok(player_entity) = &player_entities.get_single() {
-
-                if(!networked_entities.entities.contains(&server_entity) && client_entity != *player_entity) {
-                    println!("Despawn entity {} .", client_entity);     
-                    commands.entity(client_entity).despawn();
-                    network_mapping.0.remove(&server_entity);
-                   
-                }
-               
-            }    
-
-        } 
-    }
-}*/
-
 
 
 fn billboard(
@@ -895,36 +767,159 @@ fn camera_follow(
 }
 
 
+fn camera_with_parent(
+    q_child: Query<(&Parent, &Transform), With<Camera>>,
+    q_parent: Query<&GlobalTransform>,
+) {
+    for (parent, child_transform) in q_child.iter() {
+        // `parent` contains the Entity ID we can use
+        // to query components from the parent:
+        let parent_global_transform = q_parent.get(parent.get());
+
+        // do something with the components
+    }
+}
 
 fn sprite_movement(
     time: Res<Time>,
-    mut query: Query<( &mut AnimationTimer, &mut GameVelocity, &mut TextureAtlas)>,
-
+    mut q_parent: Query<(&mut AnimationTimer, &mut GameVelocity)>,
+    mut q_child: Query<(&Parent, &mut TextureAtlas)>,
 ) {    
-    for (mut timer, mut velocity, mut atlas) in &mut query {
+    for (parent, mut atlas) in q_child.iter_mut() {
 
-        if velocity.0 == Vec3::ZERO {
-            continue;
-        }       
-       
-        if(velocity.0.z < 0.) {
-            timer.tick(time.delta());
-            if timer.just_finished() {
-                atlas.index = if atlas.index == 7 {
-                    0
-                } else {
-                    atlas.index + 1
-                };
-            }
-            //info!("atlas {:?}!", atlas );
-            /*atlas.index = if atlas.index == 4 {
-                1
-            } else {
-                atlas.index + 1
-            };*/
-        }
+        if let Ok ((mut timer, velocity)) = q_parent.get_mut(parent.get()) {
+           
+            if velocity.0 == Vec3::ZERO {
+                continue;
+            }       
+          
 
       
+            let x = (velocity.0.x * 1000.0).round() / 1000.0;
+            let z = (velocity.0.z * 1000.0).round() / 1000.0;
+            println!("Z {:?}, X {:?}", z, x);    
+            
+            // Mirando hacia arriba
+            if(z > 0. && x == 0.0) {
+                println!("Mirando hacia arriba {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 0..7;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 7 {
+                        0
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }
+            }
+             // Mirando hacia la arriba a la derecha
+             else if(z > 0. && x < 0.0) {
+                println!("Mirando hacia la arriba a la derecha {:?}", velocity);   
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 8..15;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 15 {
+                        8
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+            // Mirando hacia la derecha
+            else if(z == 0. && x < 0.0) {
+                println!("Mirando hacia la derecha {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 16..23;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 23  {                   
+                        16
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+            // Mirando hacia la abajo a la derecha
+            else if(z < 0. && x < 0.0) {
+                println!("Mirando hacia la abajo a la derecha {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 24..31;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 31  {                   
+                        24
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+            // Mirando hacia abajo
+            else if(z < 0. && x == 0.0) {
+                println!("Mirando hacia abajo {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 32..39;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 39  {                   
+                        32
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+            // Mirando hacia la abajo a la izquierda
+            else if(z < 0. && x > 0.0) {
+                println!("Mirando hacia la abajo a la izquierda {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 40..47;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 47  {                   
+                        40
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+            // Mirando hacia la izquierda
+            else if(z == 0. && x > 0.0) {
+                println!("Mirando hacia la izquierda {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 48..55;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 55  {                   
+                        48
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+            
+            // Mirando hacia la arriba a la izquierda
+            else if(z > 0. && x > 0.0) {
+                println!("Mirando hacia la arriba a la izquierda {:?}", velocity);     
+                timer.tick(time.delta());
+                if timer.just_finished() {
+                    let a = 56..63;
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 63  {                   
+                        56
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+                }  
+            }
+           
+           
+          
+    
+    
+        }
     }
+
+    
 }
 
