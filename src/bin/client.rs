@@ -1,6 +1,6 @@
 
-use avian3d::math::Scalar;
-use avian3d::prelude::*;
+// use avian3d::math::Scalar;
+// use avian3d::prelude::*;
 use bevy_atmosphere::plugin::*;
 use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
@@ -10,6 +10,11 @@ use client_plugins::pointer::*;
 use client_plugins::client_clock_sync::*;
 use client_plugins::shared::*;
 
+use bevy_health_bar3d::configuration::ForegroundColor;
+use bevy_health_bar3d::prelude::{
+    BarHeight, BarSettings, ColorScheme, HealthBarPlugin, Percentage,
+};
+
 use roguelike::*;
 
 use bevy::{asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
@@ -17,6 +22,7 @@ pub use bevy_renet::renet::transport::ClientAuthentication;
 use bevy_renet::{renet::*, transport::NetcodeClientPlugin};
 use bevy_renet::*;
 use bevy_renet::renet::transport::NetcodeClientTransport;
+use std::f32::consts::TAU;
 use std::{
     collections::{HashMap, VecDeque}, net::{SocketAddr, UdpSocket}, time::{Duration, SystemTime}
 };
@@ -28,7 +34,7 @@ use bevy_inspector_egui::InspectorOptions;
 use bevy::input::common_conditions::input_toggle_active;
 // use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TouchControls};
-
+use bevy_rapier3d::prelude::*;
 
 
 #[derive(Component)]
@@ -104,9 +110,9 @@ struct SkyboxAssets {
 
 #[derive(AssetCollection, Resource)]
 struct ChaskiAssets {
-    #[asset(texture_atlas_layout(tile_size_x = 128, tile_size_y = 128, columns = 8, rows = 1, padding_x = 0, padding_y = 0, offset_x = 0, offset_y = 0))]
+    #[asset(texture_atlas_layout(tile_size_x = 128, tile_size_y = 128, columns = 8, rows = 1, padding_x = 0, padding_y = 50, offset_x = 0, offset_y = 0))]
     layout: Handle<TextureAtlasLayout>,
-    #[asset(path = "spritesheets/chasqui_front_walk.png")]
+    #[asset(path = "spritesheets/chasqui/chasqui_front_walk.png")]
     sprite: Handle<Image>,
 }
 
@@ -121,7 +127,7 @@ fn main() {
         }).set(WindowPlugin {
             primary_window: Some(Window  {
                 resolution: WindowResolution::new(720., 720.),
-                title: "Renet Demo Client".to_string(),
+                title: "Tribute Client".to_string(),
                 resizable: false,
                 ..default()
             }),
@@ -138,9 +144,9 @@ fn main() {
                 .load_collection::<ChaskiAssets>()
                 .load_collection::<SkyboxAssets>()
         )
-        .add_plugins(  
+        /*.add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
-        )
+        )*/
         .add_plugins(ObjPlugin) 
         .add_plugins((PanOrbitCameraPlugin, MaterialPlugin::<WaterMaterial>::default()))
         // .add_plugins(LookTransformPlugin)
@@ -150,9 +156,14 @@ fn main() {
         .insert_resource(PlayerInput::default())
         .insert_resource(ClientLobby::default())
         //.insert_resource(avian3d::prelude::SpatialQueryPipeline::default())
-        .add_plugins((
+        /* .add_plugins((
             PhysicsPlugins::default(),
-        ))
+        ))*/
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
+        //.add_plugins(RapierPhysicsPlugin::<NoUserData>::default().with_default_system_setup(false))
+        .add_plugins(RapierDebugRenderPlugin {           
+            ..default()
+        })
         .insert_resource(Map::default())
         .insert_resource(NetworkMapping::default())
         .insert_resource(ServerTime::default())
@@ -160,13 +171,15 @@ fn main() {
         .add_event::<PlayerCommand>()
         .add_plugins(NetcodeClientPlugin)   
       
-        .add_systems(OnEnter(AppState::InGame), (setup_level,setup_camera,move_water))
+        .add_systems(OnEnter(AppState::InGame), (setup_level, setup_camera, move_water))
         .add_plugins(Sprite3dPlugin)
         .add_plugins((
             InterpolationPlugin, 
             ClientClockSyncPlugin,
-            client_plugins::music::MusicPlugin, 
-            client_plugins::pointer::PointerPlugin, 
+            //client_plugins::music::MusicPlugin, 
+            client_plugins::pointer::PointerPlugin,
+            client_plugins::health::HealthPlugin,
+            //client_plugins::water::WaterPlugin,
         ))
         // .add_plugins(PathingPlugin)
       
@@ -177,6 +190,7 @@ fn main() {
      
                 //camera_zoom.run_if(in_state(AppState::InGame)),
                 client_send_input.run_if(in_state(AppState::InGame)),              
+                
                 client_send_player_commands.run_if(in_state(AppState::InGame)),
                 billboard.run_if(in_state(AppState::InGame)),
                
@@ -185,11 +199,9 @@ fn main() {
         .add_systems(
             FixedUpdate, (        
                 
-                // client_move_entities.run_if(in_state(AppState::InGame)),
                 client_sync_players.run_if(in_state(AppState::InGame)),
-                // client_sync_players.run_if(in_state(AppState::InGame)).after(client_sync_time_system),
+                draw_player_sprites.run_if(in_state(AppState::InGame)).after(client_sync_players),
                 // client_sync_entities.run_if(in_state(AppState::InGame)),
-                //click_move_players_system.run_if(in_state(AppState::InGame)),
                 camera_follow.run_if(in_state(AppState::InGame)),
                 sprite_movement.run_if(in_state(AppState::InGame)),
 
@@ -254,11 +266,51 @@ fn client_send_player_commands(mut player_commands: EventReader<PlayerCommand>, 
     }
 }
 
+fn draw_player_sprites( 
+    mut commands: Commands,
+    mut sprite_params : Sprite3dParams,  
+    mut entities: Query<(Entity, &Transform), ( Or<(Added<Player>, Added<ControlledPlayer>)>)>,
+    chaski: Res<ChaskiAssets>,
+){
+    for (entity, transform,) in entities.iter_mut() {   
 
-fn client_sync_players(
+        let texture_atlas = TextureAtlas {
+            layout: chaski.layout.clone(),
+            index: 0,
+        };
+        
+        let sprite_entity = commands.spawn(
+            (
+                       
+                Sprite3d {
+                    image: chaski.sprite.clone(),
+                    pixels_per_metre: 48.,
+                    //pixels_per_metre: 128.,
+                    alpha_mode: AlphaMode::Blend,
+                    unlit: true,
+                    transform: Transform::from_xyz(0., -1.0, 0.),
+                    // transform: Transform::from_xyz(0., 0., 0.),
+                    //pivot: Some(Vec2::new(0.5, 0.5)),
+                    pivot: Some(Vec2::new(0.5, 0.)), // para que gire sobre los pies y no del centro.
+                    ..default()
+                }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),
+                Name::new("PlayerSprite"),
+                Billboard
+            )).id();
+
+        commands.entity(entity).push_children(&[sprite_entity]);
+
+        println!("Draw player sprite {:?}", transform);     
+
+
+    }
+}
+  
+
+pub fn client_sync_players(
     mut commands: Commands,
     //mut meshes: ResMut<Assets<Mesh>>,
-   // mut materials: ResMut<Assets<StandardMaterial>>,
+    //mut materials: ResMut<Assets<StandardMaterial>>,
     mut client: ResMut<RenetClient>,
     client_id: Res<CurrentClientId>,
     mut lobby: ResMut<ClientLobby>,
@@ -286,22 +338,53 @@ fn client_sync_players(
                 
                 let mut client_entity = commands.spawn(
             (
-                        Sprite3d {
+                        PbrBundle {
+                            mesh: sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.))),
+                            material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 1.0)),
+                            transform: Transform::from_xyz(translation[0], translation[1], translation[2]),
+                            ..Default::default()
+                        },  
+                        /*Sprite3d {
                             image: chaski.sprite.clone(),
-                            pixels_per_metre: 37.5,
+                            pixels_per_metre: 48.,
+                            //pixels_per_metre: 128.,
                             alpha_mode: AlphaMode::Blend,
                             unlit: true,
-                            transform: Transform::from_xyz(translation[0], translation[1]+1.0, translation[2]),
+                            transform: Transform::from_xyz(translation[0], translation[1]-2.0, translation[2]),
                             // transform: Transform::from_xyz(0., 0., 0.),
-                            // pivot: Some(Vec2::new(0.5, 0.5)),
-
+                            //pivot: Some(Vec2::new(0.5, 0.5)),
+                            pivot: Some(Vec2::new(0.5, 0.)), // para que gire sobre los pies y no del centro.
                             ..default()
-                        }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()), Name::new("Player"),
+                        }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),*/
+                        Name::new("Player"),
                         //Collider::capsule(0.4, 1.0),
                         //RigidBody::Dynamic     
-                        Collider::capsule(0.4, 1.0),
+                       
+                        Collider::capsule_y(0.5, 0.5),
+                        RigidBody::KinematicPositionBased,
                         //Mass(5.0),
-                        RigidBody::Kinematic   
+                        Health {
+                            max: 100,
+                            current: 100,
+                        },
+                        Mana {
+                            max: 100,
+                            current: 100,
+                        },
+                        BarSettings::<Health> {
+                            offset: -1.05,
+                            width: 1.2,
+                            height: BarHeight::Static(0.10),
+                            ..default()
+                        },
+                        BarSettings::<Mana> {
+                            offset: -1.15,
+                            width: 1.2,
+                            height: BarHeight::Static(0.10),
+                            ..default()
+                        },
+                        //RigidBody::Kinematic,   
+                         //Collider::capsule(0.4, 1.0),
                     ),
                         
                 );
@@ -309,11 +392,11 @@ fn client_sync_players(
                 if client_id == id.raw() {
                     client_entity
                         .insert(ControlledPlayer) 
-                        .insert(Billboard)
-                        .insert(Velocity::default())
+                        //.insert(Billboard)
+                        .insert(GameVelocity::default())
                         .insert(Facing(0) )
-                        .insert(NotShadowCaster)
-                        .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
+                        //.insert(NotShadowCaster)
+                        .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+0.0, z: translation[2]}))
                         .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
 
                     //server_time_res.0 = server_time;
@@ -333,8 +416,14 @@ fn client_sync_players(
                     client_entity,
                 }) = lobby.players.remove(&id)
                 {
-                    commands.entity(client_entity).despawn();
-                    network_mapping.0.remove(&server_entity);
+
+                    // a veces el mensaje de desconexión llega para un cliente que aun no spawneaba a esa entidad
+                    // y crasheaba.
+                    if let Some(_entity_exists) = commands.get_entity(client_entity) {
+                        commands.entity(client_entity).despawn();
+                        network_mapping.0.remove(&server_entity);
+                    }
+                   
                 }
             }
             ServerMessages::SpawnProjectile { entity, translation } => {
@@ -372,6 +461,8 @@ fn client_sync_players(
                
                 };
                 
+             
+
                 let mut monster_entity = commands.spawn((
                     Sprite3d {
                         image: pig_assets.sprite.clone(),
@@ -384,15 +475,17 @@ fn client_sync_players(
                         ..default()
                     }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
                     kind,
-                    Name::new("Pig")
+                    Name::new("Pig"),
+                   
                     )
                 );       
 
                 monster_entity                
-                    .insert(Billboard)
-                    .insert(Velocity::default())
+                    //.insert(Billboard)
+                    .insert(GameVelocity::default())
                     .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
-                    .insert(Facing(0));
+                    .insert(Facing(0))
+                    ;
 
                 /*let monster_entity = commands.spawn(PbrBundle {
                     mesh: sprite_params.meshes.add(Mesh::from(Sphere::new(0.1))),
@@ -407,7 +500,9 @@ fn client_sync_players(
                 let texture_atlas: TextureAtlas =  TextureAtlas {
                     layout: seal_assets.layout.clone(),
                     index: 58,
-                };
+                };         
+              
+     
 
                 let mut client_entity = commands.spawn((
                     Sprite3d {
@@ -421,22 +516,39 @@ fn client_sync_players(
                         ..default()
                     }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
                     MonsterKind::Pig,
-                    Collider::capsule(0.4, 1.0),
+                    Collider::capsule_y(0.5, 0.5),
+                    RigidBody::KinematicPositionBased,
+                    /*Collider::capsule(0.4, 1.0),
+                    RigidBody::Kinematic,   */
                     //Mass(5.0),
                     Monster {
                         hp: 100,
                         kind: MonsterKind::Pig 
                     },
-                    RigidBody::Kinematic,   
+                    NotShadowCaster,
+                
                     Name::new("Pig")
                     )
                 );       
 
                 println!("PIG SPAWNED AT  {:?} ", translation);
 
+                println!("Client entity  {:?} ", client_entity.id());
+
                 client_entity
-                    .insert(Billboard)
-                    .insert(Velocity::default())
+                    .insert(  Health {
+                        max: 100,
+                        current: 100,
+                    })
+                    .insert(
+                        BarSettings::<Health> {
+                        offset: 0.,
+                        width: 0.,
+                        height: BarHeight::Static(0.0),
+                        ..default()
+                    })
+                    //.insert(Billboard)
+                    .insert(GameVelocity::default())
                     .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
                     .insert(Facing(0));
 
@@ -473,6 +585,12 @@ fn client_sync_players(
 
                     }
                 }               
+            },
+            ServerMessages::HealthChange { entity, max, current} => {
+                 println!("Cambio el HP {}, {} ", max, current);
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.entity(*client_entity).insert(Health { max, current });
+                }
             }
         }
     }
@@ -608,25 +726,78 @@ fn client_sync_players(
 
 
 fn billboard(
-    mut camera_query: Query< &Transform,  (With<Camera>, Without<Billboard>)>,
+    mut camera_query: Query< (&Transform, &PanOrbitCamera),  (With<Camera>, Without<Billboard>, Changed<Transform>) >,
     //mut player_query: Query<&mut Transform, (With<ControlledPlayer>, Without<Monster>)>,
-    mut entities_query: Query<&mut Transform, (With<Billboard>)>
+    mut entities_query: Query<(&mut Transform), (With<Billboard>)>
 ) {
 
  
-    let (mut camera_transform) = camera_query.single_mut();
-     /*if let Ok(mut player_transform) = player_query.get_single_mut() {
-        player_transform.rotation = camera_transform.rotation;           
-    }*/
-    for mut monster_transform in entities_query.iter_mut() {       
-        monster_transform.rotation = camera_transform.rotation;  
+    if let Ok((mut camera_transform, pan_cam)) = camera_query.get_single_mut() {
+ 
+         for (mut entity_transform) in entities_query.iter_mut() {     
+          
+            if let Some(yaw) = pan_cam.yaw {
+                entity_transform.rotation =  Quat::from_rotation_y(yaw);    
+            }
+            
+            //println!("Entity rotation {} camera rotation at translation  {:?}",  entity_transform.rotation, camera_transform.rotation);   
+            //println!("Pitch {:?}", pan_cam.pitch);  
+            if let Some(pitch) = pan_cam.pitch {
+
+                let pitch_cosine = pitch.clamp(-1.0, 1.0); 
+                let stretch_y = 1.0 / pitch_cosine;
+
+                //entity_transform.scale.y = 1. + pitch ;   
+
+             
+                let camera_forward = camera_transform.forward();
+
+                // Calculate the horizontal forward direction (flattened to ignore Y component)
+                let horizontal_forward = Vec3::new(camera_forward.x, 0.0, camera_forward.z).normalize();
+    
+                // Compute the cosine of the pitch angle between camera_forward and horizontal_forward
+                let pitch_cosine = camera_forward.dot(horizontal_forward) 
+                                   / (camera_forward.length() * horizontal_forward.length());
+    
+                // Calculate the pitch angle (theta) in radians
+                let pitch_angle = pitch_cosine.acos();
+    
+                // Normalize pitch angle to a range of 0 to 1 (0 when horizontal, 1 when vertical)
+                let pitch_ratio = pitch_angle / std::f32::consts::FRAC_PI_2;
+    
+                // Smooth stretch: lerp between 1.0 (no stretch) and MAX_STRETCH based on pitch_ratio
+                //let stretch_y = 1.0 + pitch_ratio * (1.5 - 1.0);
+                let max_stretch = 3.5; // Define your max stretch factor
+                let stretch_y = (1.0 / pitch.cos()).clamp(1.0, max_stretch);
+                //let stretch_y = 1. + pitch;
+                // Apply the stretch to the billboard’s Y scale
+                let k = 1.0; // Adjust this value to control the intensity of the stretch
+                let stretch_y =  1.0 / pitch.cos();
+                entity_transform.scale = Vec3::new(1.0, stretch_y, 1.0);
+
+            }
+          
+            //entity_transform.rotation = camera_transform.rotation; 
+            /*let quat = Quat::from_rotation_y(camera_transform.rotation.y);
+            println!("quat {:?}",  quat);     
+            println!("Entity rotation {} camera rotation at translation  {:?}",  entity_transform.rotation, camera_transform.rotation);     
+            //entity_transform.rotation = quat;
+            //entity_transform.rotation.y = camera_transform.rotation.y; 
+            //entity_transform.look_at(camera_transform.translation, Vec3::Y);
+            let quat =camera_transform.rotation.inverse();
+            entity_transform.rotation.y = quat.y;*/
+        }
     }
+
+   
 }
 
 
 fn setup_camera(
     mut commands: Commands,
 ) {
+
+    
     /*commands
         .spawn(LookTransformBundle {
             transform: LookTransform {
@@ -690,10 +861,12 @@ fn setup_camera(
                 pan_sensitivity: 0.0,
                 zoom_upper_limit: Some(35.0),
                 button_orbit: MouseButton::Right,
+                pitch: Some(TAU / 8.0),
                 // If you want to fully control the camera's focus, set smoothness to 0 so it
                 // immediately snaps to that location. If you want the 'follow' to be smoothed,
                 // leave this at default or set it to something between 0 and 1.
                 pan_smoothness: 0.0,
+                pitch_upper_limit: Some(TAU / 6.0),
                 pitch_lower_limit: Some(-0.0),
                 ..default()
             },
@@ -707,11 +880,9 @@ fn camera_follow(
        // &mut LookTransform, 
   
         &mut PanOrbitCamera),  (With<Camera>, Without<ControlledPlayer>)>,
-    player_query: Query<&Transform, With<ControlledPlayer>>
+    player_query: Query<&Transform, (With<ControlledPlayer>, Changed<Transform>)>
 ) {
-    let (
-        //mut cam, 
-        mut pan_cam) = camera_query.single_mut();
+    let (mut pan_cam) = camera_query.single_mut();
     if let Ok(player_transform) = player_query.get_single() {
      
         //cam.look = Transform::from_xyz(0., 8.0, 2.5).looking_at(player_transform.translation.into(), Vec3::Y);
@@ -727,7 +898,7 @@ fn camera_follow(
 
 fn sprite_movement(
     time: Res<Time>,
-    mut query: Query<( &mut AnimationTimer, &mut Velocity, &mut TextureAtlas)>,
+    mut query: Query<( &mut AnimationTimer, &mut GameVelocity, &mut TextureAtlas)>,
 
 ) {    
     for (mut timer, mut velocity, mut atlas) in &mut query {

@@ -487,8 +487,10 @@ fn kinematic_controller_collisions(
                         normal.reject_from_normalized(Vector::Y).normalize_or_zero();
 
                     // The movement speed along the direction above.
-                    let linear_velocity_xz = linear_velocity.dot(normal_direction_xz);
 
+               
+                    let linear_velocity_xz = linear_velocity.dot(normal_direction_xz);
+                    println!("linear_velocity_xz: {:?}", linear_velocity_xz); 
                     // Snap the Y speed based on the speed at which the character is moving
                     // up or down the slope, and how steep the slope is.
                     //
@@ -505,6 +507,7 @@ fn kinematic_controller_collisions(
 
                     let max_y_speed = -linear_velocity_xz * slope_angle.tan();
                     linear_velocity.y = linear_velocity.y.max(max_y_speed);
+                    println!("linear_velocity_y: {:?}", linear_velocity.y); 
                 } else {
                     // The character is intersecting an unclimbable object, like a wall.
                     // We want the character to slide along the surface, similarly to
@@ -518,6 +521,7 @@ fn kinematic_controller_collisions(
                     // Slide along the surface, rejecting the velocity along the contact normal.
                     let impulse = linear_velocity.reject_from_normalized(normal);
                     linear_velocity.0 = impulse;
+                    
                 }
             } else {
                 // The character is not yet intersecting the other object,

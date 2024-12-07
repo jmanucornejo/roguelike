@@ -15,6 +15,15 @@ impl Plugin for ServerPhysicsPlugin {
         // add things to your app here
         app                     
             .add_systems(Update, apply_gravity)
+            /*.add_systems(
+                // Run collision handling after collision detection.
+                //
+                // NOTE: The collision implementation here is very basic and a bit buggy.
+                //       A collide-and-slide algorithm would likely work better.
+                FixedUpdate,
+                //(kinematic_controller_collisions)
+                (manuel_collisions)
+            );  */  
             .add_systems(
                 // Run collision handling after collision detection.
                 //
@@ -22,18 +31,89 @@ impl Plugin for ServerPhysicsPlugin {
                 //       A collide-and-slide algorithm would likely work better.
                 PostProcessCollisions,
                 (kinematic_controller_collisions)
-                
             );
         }
 }
 
 
 
-#[allow(clippy::type_complexity)]
-fn kinematic_controller_collisions(
+pub fn manuel_collisions(
     collisions: Res<Collisions>,
     collider_parents: Query<&ColliderParent, Without<Sensor>>,
-    mut players: Query<(&Transform, &mut Position,&mut LinearVelocity), (With<RigidBody>, With<Player>)>,
+    mut players: Query<(&mut Transform, &mut Position,&mut LinearVelocity, &GameVelocity), (With<RigidBody>, With<Player>)>,
+    bodies: Query<&RigidBody>,
+    time: Res<Time>,
+)
+{
+    for contacts in collisions.iter() {
+
+        // Get the rigid body entities of the colliders (colliders could be children)
+        let Ok([collider_parent1, collider_parent2]) =
+            collider_parents.get_many([contacts.entity1, contacts.entity2])
+        else {
+            continue;
+        };
+
+         // Get the body of the character controller and whether it is the first
+        // or second entity in the collision.
+        let is_first: bool;
+        let character_rb: RigidBody;
+        let is_other_dynamic: bool;
+       
+
+        let (mut transform, mut position, mut linear_velocity, velocity) =
+        if let Ok(character) = players.get_mut(collider_parent1.get()) {
+            is_first = true;
+            character_rb = *bodies.get(collider_parent1.get()).unwrap();
+            is_other_dynamic = bodies
+                .get(collider_parent2.get())
+                .is_ok_and(|rb| rb.is_dynamic());
+            character
+        } else if let Ok(character) = players.get_mut(collider_parent2.get()) {
+            is_first = false;
+            character_rb = *bodies.get(collider_parent2.get()).unwrap();
+            is_other_dynamic = bodies
+                .get(collider_parent1.get())
+                .is_ok_and(|rb| rb.is_dynamic());
+            character
+        } else {
+            continue;
+        };
+
+        let rotation =  Rotation(Quaternion::default());
+        
+        for manifold in contacts.manifolds.iter() {
+            //println!("manifold: {:?}", manifold); 
+            let normal = if is_first {
+                -manifold.global_normal1(&rotation)
+            } else {
+                -manifold.global_normal2(&rotation)
+            };
+            println!("normal: {:?}", normal); 
+            let mut deepest_penetration: Scalar = Scalar::MIN;
+
+            // Solve each penetrating contact in the manifold.
+            for contact in manifold.contacts.iter() {
+                if contact.penetration > 0.0 {
+                    println!("penetration: {:?}, position: {:?}", contact.penetration, position.0); 
+                    //position.0 += normal * contact.penetration;
+                    transform.translation.y += (normal * contact.penetration).y;
+                }
+                deepest_penetration = deepest_penetration.max(contact.penetration);
+                //position.0 += normal * deepest_penetration;
+            }
+
+            println!("deepest_penetration: {:?}", deepest_penetration); 
+        }
+    }
+}
+
+
+#[allow(clippy::type_complexity)]
+pub fn kinematic_controller_collisions(
+    collisions: Res<Collisions>,
+    collider_parents: Query<&ColliderParent, Without<Sensor>>,
+    mut players: Query<(&mut Transform, &mut Position,&mut LinearVelocity, &GameVelocity), (With<RigidBody>, With<Player>)>,
     bodies: Query<&RigidBody>,
     time: Res<Time>,
 ) {
@@ -54,7 +134,7 @@ fn kinematic_controller_collisions(
         let is_other_dynamic: bool;
        
 
-        let (mut transform, mut position, mut linear_velocity) =
+        let (mut transform, mut position, mut linear_velocity, velocity) =
             if let Ok(character) = players.get_mut(collider_parent1.get()) {
                 is_first = true;
                 character_rb = *bodies.get(collider_parent1.get()).unwrap();
@@ -88,25 +168,28 @@ fn kinematic_controller_collisions(
             // Solve each penetrating contact in the manifold.
             for contact in manifold.contacts.iter() {
                 if contact.penetration > 0.0 {
-                    position.0 += normal * contact.penetration;
+                    //position.0.y += (normal * contact.penetration).y;
+                    transform.translation.y += (normal * contact.penetration).y;
                 }
                 deepest_penetration = deepest_penetration.max(contact.penetration);
             }
-
+            println!("deepest_penetration: {:?}", deepest_penetration); 
             // For now, this system only handles velocity corrections for collisions against static geometry.
             if is_other_dynamic {
                 continue;
             }
           
-
+            println!("normal: {:?}", normal); 
             // Determine if the slope is climbable or if it's too steep to walk on.
             let slope_angle = normal.angle_between(Vector::Y);
-            let max_slope_angle = Some(30.0 as Scalar);
+            let max_slope_angle = Some(90.0 as Scalar);
             let climbable = max_slope_angle.is_some_and(|angle| slope_angle.abs() <= angle);
 
+           
             if deepest_penetration > 0.0 {
                 // If the slope is climbable, snap the velocity so that the character
                 // up and down the surface smoothly.
+                println!("climbable: {:?}", climbable); 
                 if climbable {
                   
                     // Points in the normal's direction in the XZ plane.
@@ -115,6 +198,8 @@ fn kinematic_controller_collisions(
 
                     // The movement speed along the direction above.
                     let linear_velocity_xz = linear_velocity.dot(normal_direction_xz);
+
+                    //let linear_velocity_xz = velocity.0.dot(normal_direction_xz);
 
                     // Snap the Y speed based on the speed at which the character is moving
                     // up or down the slope, and how steep the slope is.
@@ -134,7 +219,7 @@ fn kinematic_controller_collisions(
                     //println!("max_y_speed: {:?}", max_y_speed); 
                 
                     linear_velocity.y = linear_velocity.y.max(max_y_speed);
-                    //println!("linear_velocity_y: {:?}", linear_velocity.y); 
+                    println!("linear_velocity_y: {:?}", linear_velocity.y); 
                 } else {
                     // The character is intersecting an unclimbable object, like a wall.
                     // We want the character to slide along the surface, similarly to
@@ -157,7 +242,7 @@ fn kinematic_controller_collisions(
                 // that would cause penetration within the next frame.
 
                 let normal_speed = linear_velocity.dot(normal);
-
+                println!("normal_speed: {:?}", normal_speed); 
                 // Don't apply an impulse if the character is moving away from the surface.
                 if normal_speed > 0.0 {
                     continue;
@@ -171,11 +256,15 @@ fn kinematic_controller_collisions(
                 // Apply the impulse differently depending on the slope angle.
                 if climbable {
                     // Avoid sliding down slopes.
+                    println!("impulse: {:?}", impulse.y); 
                     linear_velocity.y -= impulse.y.min(0.0);
+                    println!("avoid sliding down slope: {:?}", linear_velocity.y); 
                 } else {
                     // Avoid climbing up walls.
                     impulse.y = impulse.y.max(0.0);
+                    println!("impulse: {:?}", impulse.y); 
                     linear_velocity.0 -= impulse;
+                    println!("avoid climbing up walls: {:?}", linear_velocity.y); 
                 }
             }
         }
@@ -187,7 +276,7 @@ fn kinematic_controller_collisions(
 /// Applies [`ControllerGravity`] to character controllers.
 fn apply_gravity(
     time: Res<Time>,
-    mut players: Query<(&mut Velocity, &mut LinearVelocity), With<Player>>,
+    mut players: Query<(&mut GameVelocity, &mut LinearVelocity), With<Player>>,
 ) {
     // Precision is adjusted so that the example works with
     // both the `f32` and `f64` features. Otherwise you don't need this.

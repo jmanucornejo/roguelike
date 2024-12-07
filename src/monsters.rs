@@ -99,15 +99,18 @@ impl Plugin for MonstersPlugin {
                             monster_spawner.monster.clone(),
                             monster_spawner.monster_movement.clone(),
                             Name::new("Pig"),
-                            Collider::capsule(0.4, 1.0),
+                            Collider::capsule_y(0.5, 0.5),
+                            RigidBody::KinematicPositionBased,
+                            //Collider::capsule(0.4, 1.0),
                             )
                         )
-                        .insert(Velocity::default())
+                        .insert(GameVelocity::default())
                         .insert(Facing(0))
                         .insert(SpriteId(1))
                         .insert(PrevState { translation: transform.translation, rotation: Facing(0)})
                         .insert(NearestNeighbourComponent)
                         //.insert(SeenBy::default())
+                        .insert(Health { max: 100, current: 100})
                         .insert(TargetPos { position: transform.translation.into() });       
                     });
 

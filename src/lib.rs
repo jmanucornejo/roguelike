@@ -3,9 +3,9 @@ pub mod monsters;
 pub mod client_plugins;
 pub mod server_plugins;
 
-use avian3d::{parry::shape, prelude::*};
+// use avian3d::{parry::shape, prelude::*};
 use bevy_spatial::{kdtree::KDTree3};
-use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}};
+use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}, utils::HashMap};
 use bevy_renet::renet::*;
 use bevy_renet::*;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use std::{f32::consts::PI, time::Duration};
 use bevy::render::render_resource::{ShaderStages, ShaderType};
 use bevy::reflect::TypePath;
 
-
+use bevy_rapier3d::{prelude::*};
 
 // 0.14 (Solution 1)
 #[derive(States, Default, Hash, Debug, PartialEq, Clone, Eq)]
@@ -55,7 +55,7 @@ pub enum ServerMessage {
 }
 
 #[derive(Debug, Default, Component)]
-pub struct Velocity(pub Vec3);
+pub struct GameVelocity(pub Vec3);
 
 
 #[derive(Component, Debug)]
@@ -155,8 +155,30 @@ pub enum MonsterKind {
     Orc,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+#[derive(Debug, PartialEq, Component, Clone)]
 pub struct Attacking {
+    pub enemy: Entity,
+    pub auto_attack: bool,
+    pub enemy_translation: Vec3,
+    pub path: Option<(Vec<Pos>, u32)>,
+    pub timer: Timer
+}
+
+#[derive(Component, Reflect, Debug)]
+pub struct Health {
+    pub max: u32,
+    pub current: u32,
+}
+
+
+#[derive(Component, Reflect, Debug)]
+pub struct Mana {
+    pub max: u32,
+    pub current: u32,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+pub struct AttackSpeed {
     pub enemy: Entity,
     pub auto_attack: bool,
     pub enemy_translation: Vec3,
@@ -202,6 +224,11 @@ pub enum ServerMessages {
         z: i32,
         server_time: u128,
         //real_translation: [f32; 3],
+    },
+    HealthChange {
+        entity: Entity,
+        max: u32,
+        current: u32
     },
     SpawnProjectile {
         entity: Entity,
@@ -350,8 +377,13 @@ pub fn setup_level(
         },  
         Name::new("Wall"),  
         MapEntity,
-        Collider::cuboid(3., 5., 11.),
-        RigidBody::Static,
+        // Rapier3d Settings
+        Collider::cuboid(1.5, 2.5, 5.5),
+        RigidBody::Fixed
+        //Avian3s Settings
+        //Collider::cuboid(3., 5., 11.),
+        //RigidBody::Static,
+    
     ));
 
     
@@ -457,7 +489,14 @@ pub fn setup_level(
 
     let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");*/
     
-    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama-2.glb#Scene0");
+
+    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama-3.glb#Scene0");
+    /*let mesh: Handle<Mesh> = asset_server.load("terrain/bujama-3.gltf#Scene0");
+    println!("mesh: {:?}", mesh);
+    
+    let m = &meshes.get(&mesh);
+    println!("m: {:?}", m);
+    let collider = Collider::from_bevy_mesh(m.unwrap(), &ComputedColliderShape::TriMesh).unwrap();*/
     //let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");
     commands.spawn((
         SceneBundle {
@@ -472,9 +511,21 @@ pub fn setup_level(
         },
         Name::new("Map"),
         MapEntity,
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
-        RigidBody::Static
-    ));
+        RigidBody::Fixed,
+        //Collider::from_bevy_mesh(m.unwrap(), &ComputedColliderShape::TriMesh)
+        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
+        //RigidBody::Static
+    )).insert(AsyncSceneCollider {
+       // handle: scene_handle,
+        // `TriMesh` gives us the most accurate collisions, at the cost of
+        // physics complexity.
+        shape: Some(ComputedColliderShape::TriMesh),
+        named_shapes: HashMap::default(),
+    });
+    
+    //.insert(collider);
+
+
 
     /*commands.spawn((
         RigidBody::Dynamic,
@@ -573,7 +624,7 @@ pub fn spawn_fireball(
             transform: Transform::from_translation(translation),
             ..Default::default()
         })
-        .insert(Velocity(direction * 10.))
+        .insert(GameVelocity(direction * 10.))
         .insert(Projectile {
             duration: Timer::from_seconds(1.5, TimerMode::Once),
         })

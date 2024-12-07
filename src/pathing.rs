@@ -10,7 +10,8 @@ pub struct TargetPos {
     pub position: Vec3
 }
 
-
+const GROUND_TIMER: f32 = 0.5;
+const GRAVITY: f32 = -9.81;
 
 
 impl Plugin for PathingPlugin {
@@ -20,20 +21,51 @@ impl Plugin for PathingPlugin {
             .add_systems(
             Startup, (
                     setup_prohibited_areas.after(setup_level),           
-                    setup_prohibited_cells.after(setup_level) 
+                    setup_prohibited_cells.after(setup_level),
+                    setup_gravity.after(setup_level) 
                 )            
             )
-            .add_systems(
+            /*.add_systems(Update, (
+                    get_avian3d_velocity.after(PhysicsSet::Sync),
+                    apply_avian3d_velocity_system.after(get_velocity).after(PhysicsSet::Sync),
+                )
+            )*/
+            /* .add_systems(
             FixedUpdate, (                   
                     get_velocity,
                     apply_velocity_system.after(get_velocity),
+                    //.after(PhysicsSet::Writeback)
+                    //.after(TransformSystem::TransformPropagate),
+                    //read_result_system.after(apply_rapier3d_velocity_system),
                     walking_system
+
                     //client_velocity.run_if(in_state(AppState::InGame)),
+                )
+            );*/
+            .add_systems(
+                FixedUpdate, (                   
+                    get_velocity.before(PhysicsSet::StepSimulation),
+                    apply_rapier3d_velocity_system.after(get_velocity).before(PhysicsSet::StepSimulation),                  
+                    walking_system
                 )
             );
 
-
             
+        fn setup_gravity(mut rapier_config: ResMut<RapierConfiguration>) {
+            rapier_config.gravity = Vec3::new(0.0, -9.81, 0.0);      
+            /*rapier_config.timestep_mode = TimestepMode::Fixed { 
+                dt: 1.0 / 240.0,
+                substeps: 1
+            } */
+            /*rapier_config.timestep_mode = TimestepMode::Interpolated { 
+                dt: 1./240., time_scale: 1.0, substeps: 2
+            } */
+            /*rapier_config.timestep_mode = TimestepMode::Fixed {
+                dt: Duration::from_micros(15625).as_secs_f32(),
+                substeps: 1,
+            }*/
+        }    
+
         /*
         Esto podria pre-hacerse y simplemente dejar el array listo en el mapa. Para ahorrar calcularlo cada vez.. total. El mapa nunca cambia.
         */
@@ -164,19 +196,26 @@ impl Plugin for PathingPlugin {
             }  
         }
 
-        pub fn get_velocity(
-            mut query: Query<(&Transform, &mut TargetPos, &mut Velocity)>,
+
+        /* 
+        pub fn get_avian3d_velocity(
+            mut query: Query<(&mut Transform, &mut TargetPos, &mut LinearVelocity)>,
+            time: Res<Time>
 
         ) {
-            for (mut transform, state,  mut velocity) in &mut query {
-                if(transform.translation.x  != state.position.x || transform.translation.z  != state.position.z ) {
-                    //info!("state.position {:?}!", state.position);
-                    velocity.0 = calculate_velocity(transform.translation, state.position);
+            for (mut transform, target_pos,  mut linear_velocity) in &mut query {
+                if(transform.translation.x  != target_pos.position.x || transform.translation.z  != target_pos.position.z ) {
+                    info!("target_pos.position {:?}! transform {:?}! ", target_pos.position, transform.translation);
+                    let velocity = calculate_velocity(transform.translation, target_pos.position);
+
+                    linear_velocity.x = velocity.x;
+                    linear_velocity.z = velocity.z;
+
+                  
                 }    
               
             }
-        }
-
+        }*/
     
 
        
@@ -186,9 +225,141 @@ impl Plugin for PathingPlugin {
     
 }
 
-pub fn apply_velocity_system(mut query: Query<(&Velocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
-    for (velocity, mut transform, target_pos) in query.iter_mut() {
+/*pub fn apply_avian3d_velocity_system(mut query: Query<(&mut LinearVelocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
+    for (mut linear_velocity, mut transform, target_pos) in query.iter_mut() {
+    
+        if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
+            info!("linear_velocity  {:?}!", linear_velocity);
+            let diff = linear_velocity.0 * time.delta_seconds();
+            info!("diff  {:?}!", diff);
+            
+            if(target_pos.position.x > transform.translation.x &&  transform.translation.x + diff.x > target_pos.position.x) {
+                transform.translation.x = target_pos.position.x;
+                linear_velocity.x = 0.;
+                info!("Se detiene x  {:?}!", linear_velocity);
+            }
+            else if target_pos.position.x < transform.translation.x &&  transform.translation.x + diff.x <= target_pos.position.x {               
+                transform.translation.x = target_pos.position.x;
+                linear_velocity.x = 0.;
+                info!("Se detiene x  {:?}!", linear_velocity);
+            }
 
+            if(target_pos.position.z > transform.translation.z &&  transform.translation.z + diff.z > target_pos.position.z) {
+                transform.translation.z = target_pos.position.z;
+                linear_velocity.z = 0.;
+                info!("Se detiene z  {:?}!", linear_velocity);
+            }
+            else if(target_pos.position.z < transform.translation.z &&  transform.translation.z + diff.z < target_pos.position.z) {
+                transform.translation.z = target_pos.position.z;
+                linear_velocity.z = 0.;
+                info!("Se detiene z  {:?}!", linear_velocity);
+            }
+        }
+        //transform.translation += velocity.0 * time.delta_seconds();
+    }
+}*/
+
+pub fn get_velocity(
+    mut query: Query<(&mut Transform, &mut TargetPos, &mut GameVelocity)>
+
+) {
+    for (mut transform, target_pos,  mut velocity) in &mut query {
+        if(transform.translation.x  != target_pos.position.x || transform.translation.z  != target_pos.position.z ) {
+            //info!("target_pos.position {:?}! transform {:?}! ", target_pos.position, transform.translation);
+            velocity.0 = calculate_velocity(transform.translation, target_pos.position);
+                    
+        }    
+      
+    }
+}
+pub fn apply_rapier3d_velocity_system(
+    mut query: Query<(&GameVelocity, &mut Transform, &mut PrevState, &TargetPos, &mut KinematicCharacterController,  Option<&KinematicCharacterControllerOutput>)>, 
+    time: Res<Time>,
+    mut grounded_timer: Local<f32>,
+) {
+    for (velocity, mut transform, prev_state,  target_pos, mut controller, output) in query.iter_mut() {
+        
+        let mut movement = Vec3::default();
+        let delta_time = time.delta_seconds();
+
+        if output.map(|o| o.grounded).unwrap_or(false) {
+            //info!("Esta en el piso !");
+            *grounded_timer = GROUND_TIMER;
+        }
+        else {
+            movement.y += GRAVITY * delta_time * controller.custom_mass.unwrap_or(1.0);
+        }
+
+        if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
+       
+            let diff = velocity.0 * delta_time;        
+            //info!("current pos {:?}, target pos {:?}, diff {:?},last {:?}", transform.translation, target_pos.position, diff, time.elapsed().as_millis() );
+           
+
+      
+           
+            
+            if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {                
+                movement.x =  target_pos.position.x - transform.translation.x;
+                //info!("Se paso hacia la derecha  {:?}!", movement.x );                           
+            }
+            else if target_pos.position.x <= transform.translation.x &&  transform.translation.x + diff.x <= target_pos.position.x {    
+                movement.x =  target_pos.position.x - transform.translation.x;
+                //info!("Se paso hacia la izq  {:?}!", movement.x);
+            }
+            else {
+                //info!("No se paso horizontal {:?}!", diff.x);
+                movement.x =  diff.x;
+            }
+
+            if(target_pos.position.z >= transform.translation.z &&  transform.translation.z + diff.z >= target_pos.position.z) {
+                movement.z =  target_pos.position.z - transform.translation.z;
+                //info!("Se paso hacia arriba  {:?}!", movement.z); 
+            }
+            else if(target_pos.position.z <= transform.translation.z &&  transform.translation.z + diff.z <= target_pos.position.z) {
+                movement.z =  target_pos.position.z - transform.translation.z;
+                //info!("Se paso hacia abajo  {:?}!", movement.z);
+            }
+            else {
+                //info!("No se paso  vertical{:?}!", diff.x);
+                movement.z =  diff.z;
+            }
+
+         
+          
+            /*if output.map(|o| o.grounded).unwrap_or(false) {
+                info!("Esta en el piso !");
+                *grounded_timer = GROUND_TIMER;
+            }
+            // If we are grounded we can jump
+            if *grounded_timer > 0.0 {
+                *grounded_timer -= delta_time;            
+            }
+            movement.y += GRAVITY * delta_time * controller.custom_mass.unwrap_or(1.0);*/
+        
+           
+            controller.translation = Some(movement);
+        }
+        else if(controller.translation !=  None){
+            controller.translation = None;
+        }
+        //transform.translation += velocity.0 * time.delta_seconds();
+    }
+}
+
+fn read_result_system(controllers: Query<(Entity, &KinematicCharacterControllerOutput)>) {
+    for (entity, output) in controllers.iter() {
+        println!(
+            "Entity {:?} moved by {:?} and touches the ground: {:?}",
+            entity, output.effective_translation, output.grounded
+        );
+    }
+}
+
+
+pub fn apply_velocity_system(mut query: Query<(&GameVelocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
+    for (velocity, mut transform, target_pos) in query.iter_mut() {
+        
         if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
 
             //info!("diff  {:?}!", diff);
@@ -223,7 +394,7 @@ pub fn apply_velocity_system(mut query: Query<(&Velocity, &mut Transform, &Targe
     }
 }
 
-
+#[allow(unused_parens)]
 pub fn get_astar_successors(current_pos: &Pos, map: &Res<Map>) -> Vec<(Pos, u32)> {
 
     let &Pos(x, z) = current_pos;

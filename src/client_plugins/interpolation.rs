@@ -34,7 +34,7 @@ impl PositionHistory  {
         if self.buffer.len() < 2 {
             return None; // Not enough data to interpolate
         }
-
+        //println!("buffer {:?}", self.buffer);
         // Find two states to interpolate between
         let mut previous = None;
         let mut next = None;
@@ -46,36 +46,42 @@ impl PositionHistory  {
             if t0 <= target_timestamp && target_timestamp <= t1 {
                 previous = Some((delta0.as_vec3().mul(TRANSLATION_PRECISION),t0,processed0));
                 next = Some((delta1.as_vec3().mul(TRANSLATION_PRECISION), t1, processed1));
- 
+                
+                // Se cambia processed a true;
                 self.buffer[i] = (delta0, t0, true);
                 break;
             }
             else if(t1 <= target_timestamp && i+1 == self.buffer.len() - 1 && self.prev_position != self.next_position) {
                 self.prev_position = self.next_position;
                 self.buffer[i + 1] = (delta1, t1, true);
-                //println!("Se procesa fin de la cola {:?}", t1);
+                println!("Se procesa fin de la cola {:?}, position {:?}", t1, self.next_position);
+                
                 return Some(self.next_position);
             }
         }
-
+        
         // Perform interpolation based on the deltas
         if let (Some((delta0, t0, processed0)), Some((delta1, t1, processed1))) = (previous, next) {
-            //println!("delta0 {:?}, delta1 {:?}, t0 {:?}, t1 {:?},processed0 {:?}, processed1 {:?}", delta0, delta1, t0, t1, processed0, processed1);
+            println!("delta0 {:?}, delta1 {:?}, t0 {:?}, t1 {:?},processed0 {:?}, processed1 {:?}", delta0, delta1, t0, t1, processed0, processed1);
+
+            let progress = (target_timestamp - t0) as f32 / (t1 - t0) as f32;
+
 
             if(processed0 == false) {
-               // println!("NO SE HA PROCESADO LA POSICION PREVIA ");
+                println!("NO SE HA PROCESADO LA POSICION PREVIA ");
                 self.prev_position = self.prev_position + delta0;     
                 self.next_position = self.prev_position + delta1;   
             }
             if(processed1== false) {
                
             }          
-         
-            let progress = (target_timestamp - t0) as f32 / (t1 - t0) as f32;
-
+            
+            
             let current_position = self.prev_position.lerp(self.next_position, progress);
 
-           // println!("Moved to  {:?} from  {:?} -> {:?} progress {:?}",current_position, self.prev_position , self.next_position, progress);
+          
+
+            println!("Moved to  {:?} from  {:?} -> {:?} progress {:?} time {:?}",current_position, self.prev_position , self.next_position, progress, target_timestamp);
 
             return Some(current_position);
         }
@@ -155,7 +161,7 @@ impl Plugin for InterpolationPlugin {
             client_time: Res<Time>,
             clock_offset: Res<ClockOffset>,
             mut prev_clock: ResMut<PrevClock>,
-            mut query: Query<(&mut PositionHistory, &mut Transform, &mut Velocity)>,
+            mut query: Query<(&mut PositionHistory, &mut Transform, &mut GameVelocity)>,
         ) {
 
             if( server_time_res.0 == 0) {
@@ -183,8 +189,10 @@ impl Plugin for InterpolationPlugin {
                  
                     let diff = transform.translation - interpolated_position;
                     velocity.0 = diff / (target_time - prev_clock.0) as f32;    
-                    //let speed = diff.x / (target_time - prev_clock.0) as f32;        
+                    
                     prev_clock.0 = target_time;      
+                    
+                    //let speed = diff.x / (target_time - prev_clock.0) as f32;     
                     //println!("velocidad {:?}, transform {:?}, targettime {:?}", speed, interpolated_position, target_time);
                     transform.translation = interpolated_position;
                     continue;

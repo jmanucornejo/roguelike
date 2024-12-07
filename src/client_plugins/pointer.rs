@@ -3,7 +3,7 @@ use bevy::{pbr::NotShadowCaster, prelude::*, window::PrimaryWindow};
 use bevy_asset_loader::prelude::*;
 use client_plugins::shared::*;
 use crate::*;
-
+use avian3d::{parry::shape, prelude::*};
 
 #[derive(AssetCollection, Resource)]
 struct GridTarget {
@@ -42,16 +42,20 @@ impl Plugin for PointerPlugin {
                     .continue_to_state(AppState::InGame)
                     .load_collection::<GridTarget>()
             )
+            
             .add_systems(OnEnter(AppState::Setup), ((setup_cursor)))
             .add_systems(OnEnter(AppState::InGame), ((setup_target)))
             .add_systems(Update, (  
                     move_cursor.run_if(in_state(AppState::InGame)),
                     player_input.run_if(in_state(AppState::InGame)),        
-                    update_cursor_system.run_if(in_state(AppState::InGame)),
+                )
+            )           
+            .add_systems(FixedUpdate, (       
+                    update_cursor_system_rapier3d.run_if(in_state(AppState::InGame)),
                     changed_cursor.run_if(in_state(AppState::InGame)).after(setup_cursor),
                 )
             );
-            
+                
 
         fn setup_target(mut commands: Commands,
             assets            : Res<GridTarget>,
@@ -80,8 +84,76 @@ impl Plugin for PointerPlugin {
         
         }
 
+        fn update_cursor_system_rapier3d(
+            primary_window: Query<&Window, With<PrimaryWindow>>,
+            mut target_query: Query<&mut Transform, With<Target>>,
+            camera_query: Query<(&Camera, &GlobalTransform)>,
+            rapier_context: Res<RapierContext>,
+            interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
+            mut cursor: Query<&mut GameCursor>,
+        ) {
+            let (camera,camera_transform) = camera_query.single();
+            
+            let mut target_transform = target_query.single_mut();
+            if let Some(cursor_pos) = primary_window.single().cursor_position() {
 
-        fn update_cursor_system(
+      
+                if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+
+                    let cam_transform = camera_transform.compute_transform();
+                    let direction: Dir3 = ray.direction;
+
+                    if let Some((entity, time_of_impact)) = rapier_context.cast_ray(cam_transform.translation, direction.normalize(), bevy_rapier3d::prelude::Real::MAX, true, QueryFilter::default()) {
+                        // The first collider hit has the entity `entity` and it hit after
+                        // the ray travelled a distance equal to `ray_dir * time_of_impact`.
+                        let hit_point = cam_transform.translation + direction.normalize() * time_of_impact;
+                        println!("Entity {:?} hit at point {}", entity, hit_point);
+
+                        let mut game_cursor: Mut<'_, GameCursor> = cursor.single_mut();
+                      
+                        if let Ok((interactive_entity)) = interactive_entities.get(entity) {                            
+                      
+                            if(Some(interactive_entity) != game_cursor.hovered_entity) {
+                                game_cursor.hovered_entity = Some(interactive_entity);
+                            }                          
+                           
+                            if(game_cursor.action != CursorKind::Attack) {
+                                game_cursor.action = CursorKind::Attack;
+                            }                           
+                        }
+                        else {
+                           // println!("No le dimos a nada.Frist hit {:?}", first_hit.entity);
+                            if(game_cursor.hovered_entity != None) {
+                                game_cursor.hovered_entity = None;
+                            }
+                            
+                            if(game_cursor.action != CursorKind::Default) {
+                                game_cursor.action = CursorKind::Default;
+                            }
+                        }
+                      
+                        //println!("First hit: {:?}", first_hit);
+                        /*println!(
+                            "Hit entity {:?} at {} with normal {}",
+                            first_hit.entity,
+                            ray.origin + *ray.direction * first_hit.time_of_impact,
+                            first_hit.normal,
+                        );*/
+
+                        let mut translation = ray.origin + *ray.direction * time_of_impact;
+                        translation.x = translation.x.round();
+                        translation.z = translation.z.round();
+                        translation.y =  translation.y + 0.15; 
+                        target_transform.translation = translation;
+                    }                   
+                
+                   
+                }
+            }
+        }
+
+
+        fn update_cursor_system_avian3d(
             primary_window: Query<&Window, With<PrimaryWindow>>,
             mut target_query: Query<&mut Transform, With<Target>>,
             camera_query: Query<(&Camera, &GlobalTransform)>,
