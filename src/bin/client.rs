@@ -60,6 +60,15 @@ struct ClientLobby {
 struct CurrentClientId(u64);
 
 
+#[derive(Debug, Resource)]
+struct CameraFacing(u8);
+
+// custom implementation for unusual values
+impl Default for CameraFacing {
+    fn default() -> Self {
+        CameraFacing(0)
+    }
+}
 
 
 
@@ -155,6 +164,7 @@ fn main() {
         .add_plugins(RenetClientPlugin)        
         .insert_resource(PlayerInput::default())
         .insert_resource(ClientLobby::default())
+        .insert_resource(CameraFacing::default())
         //.insert_resource(avian3d::prelude::SpatialQueryPipeline::default())
         /* .add_plugins((
             PhysicsPlugins::default(),
@@ -193,6 +203,8 @@ fn main() {
                 
                 client_send_player_commands.run_if(in_state(AppState::InGame)),
                 billboard.run_if(in_state(AppState::InGame)),
+                set_camera_facing.run_if(in_state(AppState::InGame)),
+                set_entities_facing.run_if(in_state(AppState::InGame)),
                
             )
         )  
@@ -275,7 +287,7 @@ fn draw_player_sprites(
 
         let texture_atlas = TextureAtlas {
             layout: chaski.layout.clone(),
-            index: 0,
+            index: 32,
         };
         
         let sprite_entity = commands.spawn(
@@ -393,7 +405,7 @@ pub fn client_sync_players(
                         .insert(ControlledPlayer) 
                         //.insert(Billboard)
                         .insert(GameVelocity::default())
-                        .insert(Facing(0) )
+                        .insert(Facing(4) )
                         //.insert(NotShadowCaster)
                         .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+0.0, z: translation[2]}))
                         .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
@@ -648,16 +660,7 @@ fn billboard(
                 entity_transform.scale = Vec3::new(1.0, stretch_y, 1.0);
 
             }
-          
-            //entity_transform.rotation = camera_transform.rotation; 
-            /*let quat = Quat::from_rotation_y(camera_transform.rotation.y);
-            println!("quat {:?}",  quat);     
-            println!("Entity rotation {} camera rotation at translation  {:?}",  entity_transform.rotation, camera_transform.rotation);     
-            //entity_transform.rotation = quat;
-            //entity_transform.rotation.y = camera_transform.rotation.y; 
-            //entity_transform.look_at(camera_transform.translation, Vec3::Y);
-            let quat =camera_transform.rotation.inverse();
-            entity_transform.rotation.y = quat.y;*/
+        
         }
     }
 
@@ -780,143 +783,144 @@ fn camera_with_parent(
     }
 }
 
+
+fn set_camera_facing(
+    mut camera_query: Query< (&Transform, &PanOrbitCamera),  (With<Camera>, Changed<Transform>) >,
+    mut camera_rotation: ResMut<CameraFacing>
+) {
+ 
+    if let Ok((mut camera_transform, pan_cam)) = camera_query.get_single_mut() {
+        if let Some(yaw) = pan_cam.yaw {
+         
+            let mut rotation = ((8.0 * (yaw.to_degrees()) / 360.0).round() % 8.0) as i32;
+            if(rotation < 0) {
+                rotation += 8;
+            }
+
+            if(rotation as u8 != camera_rotation.0) {
+                camera_rotation.0 = rotation as u8;    
+            }
+              
+        }        
+    }    
+}
+
+fn set_entities_facing(
+    mut query: Query<(&mut Facing, &GameVelocity)>,
+) {
+    for (mut facing, velocity) in query.iter_mut() {  
+          
+        if velocity.0 == Vec3::ZERO {               
+            continue;
+        }             
+  
+        let x = (velocity.0.x * 1000.0).round() / 1000.0;
+        let z = (velocity.0.z * 1000.0).round() / 1000.0;        
+        
+        // Mirando hacia arriba
+        if(z > 0. && x == 0.0) {
+            *facing = Facing(0);
+          
+        }
+        // Mirando hacia la arriba a la derecha
+        else if(z > 0. && x < 0.0) {
+            *facing = Facing(1);
+           
+        }
+        // Mirando hacia la derecha
+        else if(z == 0. && x < 0.0) {
+            *facing = Facing(2);
+            
+        }
+        // Mirando hacia la abajo a la derecha
+        else if(z < 0. && x < 0.0) {
+            *facing = Facing(3);
+           
+        }
+        // Mirando hacia abajo
+        else if(z < 0. && x == 0.0) {
+            *facing = Facing(4);
+           
+        }
+        // Mirando hacia la abajo a la izquierda
+        else if(z < 0. && x > 0.0) {
+            *facing = Facing(5);
+           
+        }
+        // Mirando hacia la izquierda
+        else if(z == 0. && x > 0.0) {
+            *facing = Facing(6);
+            
+        }
+        
+        // Mirando hacia la arriba a la izquierda
+        else if(z > 0. && x > 0.0) {
+            *facing = Facing(7);
+           
+        }           
+    }
+}
+
 fn sprite_movement(
     time: Res<Time>,
-    mut q_parent: Query<(&mut AnimationTimer, &mut GameVelocity)>,
+    mut q_parent: Query<(&mut AnimationTimer, &mut Facing, &GameVelocity)>,
     mut q_child: Query<(&Parent, &mut TextureAtlas)>,
+    camera_rotation: Res<CameraFacing>
 ) {    
+
+   
     for (parent, mut atlas) in q_child.iter_mut() {
 
-        if let Ok ((mut timer, velocity)) = q_parent.get_mut(parent.get()) {
-           
-            if velocity.0 == Vec3::ZERO {
-                continue;
-            }       
-          
+        if let Ok ((mut timer, mut facing, velocity)) = q_parent.get_mut(parent.get()) {
 
+            // Cuando se cambia la rotación, se debe ajustar el sprite.
+            if camera_rotation.is_changed() {
+
+                let col_index = atlas.index  % 8;
+                println!("col_index {:?}", col_index);  
+
+                let row_index = camera_rotation.0+facing.0;
+                println!("row_index {:?}", row_index);  
+                atlas.index = col_index + (( row_index * 8) % 64) as usize;
+            
+            }
+
+            
+            if velocity.0 == Vec3::ZERO {               
+                continue;
+            }             
       
             let x = (velocity.0.x * 1000.0).round() / 1000.0;
             let z = (velocity.0.z * 1000.0).round() / 1000.0;
-            println!("Z {:?}, X {:?}", z, x);    
-            
-            // Mirando hacia arriba
-            if(z > 0. && x == 0.0) {
-                println!("Mirando hacia arriba {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 0..7;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 7 {
-                        0
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }
-            }
-             // Mirando hacia la arriba a la derecha
-             else if(z > 0. && x < 0.0) {
-                println!("Mirando hacia la arriba a la derecha {:?}", velocity);   
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 8..15;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 15 {
-                        8
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-            // Mirando hacia la derecha
-            else if(z == 0. && x < 0.0) {
-                println!("Mirando hacia la derecha {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 16..23;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 23  {                   
-                        16
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-            // Mirando hacia la abajo a la derecha
-            else if(z < 0. && x < 0.0) {
-                println!("Mirando hacia la abajo a la derecha {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 24..31;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 31  {                   
-                        24
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-            // Mirando hacia abajo
-            else if(z < 0. && x == 0.0) {
-                println!("Mirando hacia abajo {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 32..39;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 39  {                   
-                        32
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-            // Mirando hacia la abajo a la izquierda
-            else if(z < 0. && x > 0.0) {
-                println!("Mirando hacia la abajo a la izquierda {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 40..47;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 47  {                   
-                        40
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-            // Mirando hacia la izquierda
-            else if(z == 0. && x > 0.0) {
-                println!("Mirando hacia la izquierda {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 48..55;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 55  {                   
-                        48
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-            
-            // Mirando hacia la arriba a la izquierda
-            else if(z > 0. && x > 0.0) {
-                println!("Mirando hacia la arriba a la izquierda {:?}", velocity);     
-                timer.tick(time.delta());
-                if timer.just_finished() {
-                    let a = 56..63;
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == 63  {                   
-                        56
-                    }
-                    else {
-                        atlas.index + 1
-                    };
-                }  
-            }
-           
-           
           
-    
-    
+            if(z != 0. || x  != 0.0) { 
+
+                let row_index = (8 * atlas.index / 64) % 8;
+
+                timer.tick(time.delta());
+                if timer.just_finished() {
+
+                    let row_index = (camera_rotation.0+facing.0) as usize;
+                    //let col_index = atlas.index  % 8;
+                    
+                    println!("row_index {:?}",row_index);    
+                    let starting_row_animation = row_index*8;
+                    println!("starting_row_animation {:?}",starting_row_animation);  
+                    let a = (starting_row_animation)..(starting_row_animation + 7);
+
+                    println!("range {:?}, atlas.index {:?}",a ,atlas.index );  
+                    atlas.index = if !a.contains(&atlas.index) || atlas.index == ((row_index*8)+7) {
+                        starting_row_animation
+                    }
+                    else {
+                        atlas.index + 1
+                    };
+
+                
+                }
+
+            }
+               
         }
     }
 

@@ -93,7 +93,7 @@ pub struct MovementDelta {
 
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Component, Clone)]
-pub struct Facing(pub i8);
+pub struct Facing(pub u8);
 
 #[derive(Debug, Component)]
 pub struct Player {
