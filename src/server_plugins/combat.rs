@@ -353,45 +353,7 @@ pub fn is_in_view_avian3d(spatial_query: &SpatialQuery, origin_translation: Vec3
 
     let direction = Dir3::from_xyz(xyz.x, xyz.y, xyz.z);    
 
-    let direction = if let Ok(direction) = direction {  direction  }  else { return false; };
-
-    /*info!("origen {:?}, destino {:?}, dirección {:?}", origin_translation, target_translation, direction);
-    if let Some(first_hit) = spatial_query.cast_ray(
-        origin_translation,                    // Origin
-        direction,                       // Direction
-        15.,                         // Maximum time of impact (travel distance)
-        false,                          // Does the ray treat colliders as "solid"
-        SpatialQueryFilter::default(), // Query filter
-    ) {     
-      
-        println!("First hit: {:?}", first_hit);
-        /*println!(
-            "Hit entity {:?} at {} with normal {}",
-            first_hit.entity,
-            ray.origin + *ray.direction * first_hit.time_of_impact,
-            first_hit.normal,
-        );*/     
-
-        
-    }
-
-    let mut hits = vec![];
-
-    // Cast ray and get all hits
-    spatial_query.ray_hits_callback(
-        origin_translation,                    // Origin
-        direction,                       // Direction
-        15.0,                         // Maximum time of impact (travel distance)
-        false,                          // Does the ray treat colliders as "solid"
-        SpatialQueryFilter::default(), // Query filter
-        |hit| {                        // Callback function
-            hits.push(hit);
-            true
-        },
-    );
-
-
-    println!("hits: {:?}", hits);*/
+    let direction = if let Ok(direction) = direction {  direction  }  else { return false; }; 
 
     // Cast ray and print first hit
     if let Some(first_hit) = spatial_query.cast_ray_predicate(

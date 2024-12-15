@@ -162,11 +162,11 @@ impl Plugin for InterpolationPlugin {
             mut query: Query<(&mut PositionHistory, &mut Transform, &mut GameVelocity)>,
         ) {
 
-            if( server_time_res.0 == 0) {
+            if server_time_res.0 == 0 {
                 println!("Aún no se define la hora del servidor.  {:?} ", server_time_res.0 );
                 return;
             }
-            if(client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER) {
+            if client_time.elapsed().as_millis() + clock_offset.0 < INTERPLOATE_BUFFER {
                 println!("El buffer es menor que el tiempo que ha pasado.  {:?} ", server_time_res.0 );
                 return;
             }

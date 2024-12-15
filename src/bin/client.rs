@@ -1,7 +1,11 @@
 
+use bevy::core_pipeline::prepass::DepthPrepass;
+
+use bevy::pbr::NotShadowReceiver;
 // use avian3d::math::Scalar;
 // use avian3d::prelude::*;
 use bevy_atmosphere::plugin::*;
+
 use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
@@ -17,7 +21,8 @@ use bevy_health_bar3d::prelude::{
 
 use roguelike::*;
 
-use bevy::{asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
+use bevy::{  
+    asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
 pub use bevy_renet::renet::transport::ClientAuthentication;
 use bevy_renet::{renet::*, transport::NetcodeClientPlugin};
 use bevy_renet::*;
@@ -153,9 +158,9 @@ fn main() {
                 .load_collection::<ChaskiAssets>()
                 .load_collection::<SkyboxAssets>()
         )
-        /*.add_plugins(  
+        .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
-        )*/
+        )
         .add_plugins(ObjPlugin) 
         .add_plugins((PanOrbitCameraPlugin, MaterialPlugin::<WaterMaterial>::default()))
         // .add_plugins(LookTransformPlugin)
@@ -180,7 +185,6 @@ fn main() {
         .insert_resource(ClockOffset::default())
         .add_event::<PlayerCommand>()
         .add_plugins(NetcodeClientPlugin)   
-      
         .add_systems(OnEnter(AppState::InGame), (setup_level, setup_camera, move_water))
         .add_plugins(Sprite3dPlugin)
         .add_plugins((
@@ -189,10 +193,9 @@ fn main() {
             //client_plugins::music::MusicPlugin, 
             client_plugins::pointer::PointerPlugin,
             client_plugins::health::HealthPlugin,
+            client_plugins::spell_animations::SpellAnimationsPlugin,
             //client_plugins::water::WaterPlugin,
-        ))
-        // .add_plugins(PathingPlugin)
-      
+        ))      
         .add_systems(Update, 
             (
                
@@ -256,6 +259,7 @@ fn create_renet_transport(app: &mut App)  {
     app.insert_resource(CurrentClientId(client_id));
 
 }
+
 
 fn client_send_input(
     player_input: Res<PlayerInput>, 
@@ -351,7 +355,7 @@ pub fn client_sync_players(
             (
                         PbrBundle {
                             mesh: sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.))),
-                            material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.5)),
+                            material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.0)),
                             transform: Transform::from_xyz(translation[0], translation[1], translation[2]),
                             ..Default::default()
                         },  
@@ -370,8 +374,13 @@ pub fn client_sync_players(
                         Name::new("Player"),
                         //Collider::capsule(0.4, 1.0),
                         //RigidBody::Dynamic     
-                       
+                        NotShadowCaster,
                         Collider::capsule_y(0.5, 0.5),
+                        /*CollisionGroups::new(
+                            Group::GROUP_1,
+                            Group::GROUP_2,
+                        ),*/
+                        ActiveCollisionTypes::KINEMATIC_STATIC,
                         RigidBody::KinematicPositionBased,
                         //Mass(5.0),
                         Health {
@@ -495,7 +504,7 @@ pub fn client_sync_players(
                     //.insert(Billboard)
                     .insert(GameVelocity::default())
                     .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
-                    .insert(Facing(0))
+                    .insert(Facing(4))
                     ;
 
                 /*let monster_entity = commands.spawn(PbrBundle {
@@ -528,6 +537,11 @@ pub fn client_sync_players(
                     }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
                     MonsterKind::Pig,
                     Collider::capsule_y(0.5, 0.5),
+                    /*CollisionGroups::new(
+                        Group::GROUP_1,
+                        Group::GROUP_2,
+                    ),*/
+                    ActiveCollisionTypes::KINEMATIC_STATIC,
                     RigidBody::KinematicPositionBased,
                     /*Collider::capsule(0.4, 1.0),
                     RigidBody::Kinematic,   */
@@ -745,7 +759,8 @@ fn setup_camera(
                 pitch_lower_limit: Some(-0.0),
                 ..default()
             },
-            AtmosphereCamera::default()
+            AtmosphereCamera::default(),
+            DepthPrepass
         ));
 }
 
@@ -786,7 +801,7 @@ fn camera_with_parent(
 
 fn set_camera_facing(
     mut camera_query: Query< (&Transform, &PanOrbitCamera),  (With<Camera>, Changed<Transform>) >,
-    mut camera_rotation: ResMut<CameraFacing>
+    mut camera_facing: ResMut<CameraFacing>
 ) {
  
     if let Ok((mut camera_transform, pan_cam)) = camera_query.get_single_mut() {
@@ -797,13 +812,14 @@ fn set_camera_facing(
                 rotation += 8;
             }
 
-            if(rotation as u8 != camera_rotation.0) {
-                camera_rotation.0 = rotation as u8;    
+            if(rotation as u8 != camera_facing.0) {
+                camera_facing.0 = rotation as u8;    
             }
               
         }        
     }    
 }
+
 
 fn set_entities_facing(
     mut query: Query<(&mut Facing, &GameVelocity)>,
@@ -895,20 +911,20 @@ fn sprite_movement(
           
             if(z != 0. || x  != 0.0) { 
 
-                let row_index = (8 * atlas.index / 64) % 8;
+                //let row_index = (8 * atlas.index / 64) % 8;
 
                 timer.tick(time.delta());
                 if timer.just_finished() {
 
-                    let row_index = (camera_rotation.0+facing.0) as usize;
+                    let row_index = ((camera_rotation.0+facing.0) % 8) as usize;
                     //let col_index = atlas.index  % 8;
                     
-                    println!("row_index {:?}",row_index);    
+                    //println!("row_index {:?}",row_index);    
                     let starting_row_animation = row_index*8;
-                    println!("starting_row_animation {:?}",starting_row_animation);  
+                    //println!("starting_row_animation {:?}",starting_row_animation);  
                     let a = (starting_row_animation)..(starting_row_animation + 7);
 
-                    println!("range {:?}, atlas.index {:?}",a ,atlas.index );  
+                    //println!("range {:?}, atlas.index {:?}",a ,atlas.index );  
                     atlas.index = if !a.contains(&atlas.index) || atlas.index == ((row_index*8)+7) {
                         starting_row_animation
                     }

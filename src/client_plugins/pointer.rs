@@ -1,9 +1,12 @@
 use avian3d::math::Scalar;
-use bevy::{pbr::NotShadowCaster, prelude::*, window::PrimaryWindow};
+use bevy::{pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, window::PrimaryWindow};
 use bevy_asset_loader::prelude::*;
+use bevy_panorbit_camera::PanOrbitCamera;
 use client_plugins::shared::*;
+use bevy_contact_projective_decals::{decal_mesh_quad, DecalBundle, DecalMaterial, DecalPlugin};
+use bevy::pbr::ExtendedMaterial;
 use crate::*;
-use avian3d::{parry::shape, prelude::*};
+// use avian3d::{parry::shape, prelude::*};
 
 #[derive(AssetCollection, Resource)]
 struct GridTarget {
@@ -42,21 +45,54 @@ impl Plugin for PointerPlugin {
                     .continue_to_state(AppState::InGame)
                     .load_collection::<GridTarget>()
             )
-            
+            .add_plugins((DecalPlugin))
             .add_systems(OnEnter(AppState::Setup), ((setup_cursor)))
-            .add_systems(OnEnter(AppState::InGame), ((setup_target)))
+            .add_systems(OnEnter(AppState::InGame), ((setup_target, setup_target_decal)))
             .add_systems(Update, (  
                     move_cursor.run_if(in_state(AppState::InGame)),
                     player_input.run_if(in_state(AppState::InGame)),        
                 )
             )           
             .add_systems(FixedUpdate, (       
+                    shape_cast.run_if(in_state(AppState::InGame)),
                     update_cursor_system_rapier3d.run_if(in_state(AppState::InGame)),
                     changed_cursor.run_if(in_state(AppState::InGame)).after(setup_cursor),
                 )
             );
                 
 
+
+        fn setup_target_decal(
+            mut commands: Commands,
+            mut meshes: ResMut<Assets<Mesh>>,
+            mut materials: ResMut<Assets<StandardMaterial>>,
+            mut decal_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DecalMaterial>>>,
+            asset_server: Res<AssetServer>,
+        ) {
+            commands.spawn(DecalBundle {
+                transform: Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(11.0)),
+                decal_material: decal_materials.add(ExtendedMaterial::<StandardMaterial, DecalMaterial> {
+                    base: StandardMaterial {
+                        base_color_texture: Some(asset_server.load("grid_whitespace_big.png")),
+                        //base_color_texture: Some(asset_server.load("blast.png")),
+                        //base_color: Color::Srgba(Srgba::RED),
+                        alpha_mode: AlphaMode::Blend,
+                        ..default()
+                    },
+                    extension: DecalMaterial {
+                        depth_fade_factor:0.0,
+                    },
+                }),
+                mesh: meshes.add(decal_mesh_quad(Vec3::Y)),
+                
+                ..default()
+            })
+            .insert(Target)
+            .insert(NotShadowCaster)
+            .insert(NotShadowReceiver)
+            .insert(Name::new("Target"));
+        }
+        
         fn setup_target(mut commands: Commands,
             assets            : Res<GridTarget>,
             mut meshes: ResMut<Assets<Mesh>>, 
@@ -78,21 +114,66 @@ impl Plugin for PointerPlugin {
                     ..Default::default()
                 },
                 NotShadowCaster, 
-                Name::new("Target")))
-                .insert(Target);
+                Name::new("Target old")))
+                ;
 
         
         }
 
+        fn shape_cast(
+            primary_window: Query<&Window, With<PrimaryWindow>>,
+            rapier_context: Res<RapierContext>,
+            camera_query: Query<(&Camera, &GlobalTransform)>,
+        ) {
+            let (camera,camera_transform) = camera_query.single();
+
+            if let Some(cursor_pos) = primary_window.single().cursor_position() {      
+
+                if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+
+                    let cam_transform = camera_transform.compute_transform();
+                    let direction: Dir3 = ray.direction;
+
+                    let shape = Collider::cuboid(1.0, 2.0, 1.0);
+                    let shape_pos = cam_transform.translation;
+                    let shape_rot = Quat::from_rotation_z(0.8);
+                    let shape_vel = Vec3::new(0.0, 0.4, 0.0);
+                    let filter = QueryFilter::default();
+                    let options = ShapeCastOptions {
+                        max_time_of_impact: 150.0,
+                        target_distance: 0.0,
+                        stop_at_penetration: false,
+                        compute_impact_geometry_on_penetration: true,
+                    };
+                    
+    
+                    let origin = Vec3::new(cursor_pos.x, 100.0, cursor_pos.y);
+                    //let direction = Vec3::new(0.0, -1.0, 0.0).normalize(); // Move along the X-axis
+                    let max_distance = 150.0; // Maximum travel distance
+
+                    if let Some((entity, hit)) =
+                        rapier_context.cast_shape(shape_pos,  Quat::IDENTITY, direction.normalize(), &shape, options, filter)
+                    {
+                        // The first collider hit has the entity `entity`. The `hit` is a
+                        // structure containing details about the hit configuration.
+                        /*println!(
+                            "Hit the entity {:?} with the configuration: {:?}",
+                            entity, hit
+                        );*/
+                    }
+                }
+            }
+
+        }
         fn update_cursor_system_rapier3d(
             primary_window: Query<&Window, With<PrimaryWindow>>,
             mut target_query: Query<&mut Transform, With<Target>>,
-            camera_query: Query<(&Camera, &GlobalTransform)>,
+            camera_query: Query<(&Camera,  &GlobalTransform)>,
             rapier_context: Res<RapierContext>,
             interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
             mut cursor: Query<&mut GameCursor>,
         ) {
-            let (camera,camera_transform) = camera_query.single();
+            let (camera, camera_transform) = camera_query.single();
             
             let mut target_transform = target_query.single_mut();
             if let Some(cursor_pos) = primary_window.single().cursor_position() {
@@ -108,6 +189,40 @@ impl Plugin for PointerPlugin {
                         // the ray travelled a distance equal to `ray_dir * time_of_impact`.
                         let hit_point = cam_transform.translation + direction.normalize() * time_of_impact;
                         // println!("Entity {:?} hit at point {}", entity, hit_point);
+
+                        let shape = Collider::cuboid(1.0, 2.0, 1.0);
+                        let origin = Vec3::new(hit_point.x, -10.0, hit_point.z);
+                        let direction = Vec3::new(0.0, 1.0, 0.0).normalize(); // Move along the Y-axis upwards
+                        let filter = QueryFilter::default();
+                        let options = ShapeCastOptions {
+                            max_time_of_impact: 150.0,
+                            target_distance: 0.0,
+                            stop_at_penetration: true,
+                            compute_impact_geometry_on_penetration: false,
+                        };
+                        if let Some((entity, hit)) =
+                        rapier_context.cast_shape(origin,  Quat::IDENTITY, direction.normalize(), &shape, options, filter)
+                        {
+                            // The first collider hit has the entity `entity`. The `hit` is a
+                            // structure containing details about the hit configuration.
+                            
+
+                            if let Some( details) = hit.details {
+                                let mut translation = ray.origin + *ray.direction * time_of_impact;
+                                translation.x = translation.x.round();
+                                translation.z = translation.z.round();
+                                //translation.y =  translation.y + 0.15; 
+                                translation.y = details.witness1.y.round();
+                                target_transform.translation = translation;
+                            }
+                            
+                            /*println!(
+                                "Hit the entity {:?} with the configuration: {:?}",
+                                entity, hit
+                            );*/
+                  
+
+                        }
 
                         let mut game_cursor: Mut<'_, GameCursor> = cursor.single_mut();
                       
@@ -140,11 +255,12 @@ impl Plugin for PointerPlugin {
                             first_hit.normal,
                         );*/
 
-                        let mut translation = ray.origin + *ray.direction * time_of_impact;
+                        /*let mut translation = ray.origin + *ray.direction * time_of_impact;
                         translation.x = translation.x.round();
                         translation.z = translation.z.round();
-                        translation.y =  translation.y + 0.15; 
-                        target_transform.translation = translation;
+                        //translation.y =  translation.y + 0.15; 
+                        translation.y = translation.y ;
+                        target_transform.translation = translation;*/
                     }                   
                 
                    
@@ -153,7 +269,7 @@ impl Plugin for PointerPlugin {
         }
 
 
-        fn update_cursor_system_avian3d(
+        /*fn update_cursor_system_avian3d(
             primary_window: Query<&Window, With<PrimaryWindow>>,
             mut target_query: Query<&mut Transform, With<Target>>,
             camera_query: Query<(&Camera, &GlobalTransform)>,
@@ -251,7 +367,7 @@ impl Plugin for PointerPlugin {
                     }*/
                 }
             }
-        }
+        }*/
 
         fn changed_cursor(
             mut cursors: Query<(&GameCursor, &mut UiImage), (With<GameCursor>,Changed<GameCursor>)>,

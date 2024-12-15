@@ -138,6 +138,7 @@ fn main() {
             ).chain());
         })
         .add_systems(FixedUpdate, run_physics_schedule.before(roguelike::pathing::get_velocity))
+       
         .run();
 }
 
@@ -289,13 +290,18 @@ fn server_events(
                         //Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
                         //Restitution::ZERO.with_combine_rule(CoefficientCombine::Min), 
                         Collider::capsule_y(0.5, 0.5),
-                     
+                        /*CollisionGroups::new(
+                            Group::GROUP_1,
+                            Group::GROUP_2,
+                        ),*/
                         //Mass(5.0),
+                        ActiveCollisionTypes::KINEMATIC_STATIC,
                         RigidBody::KinematicPositionBased,
                         TransformInterpolation::default(),
                         //TranslationInterpolation,
                         KinematicCharacterController {
                             offset: CharacterLength::Absolute(0.3),
+                            filter_flags: QueryFilterFlags::EXCLUDE_KINEMATIC,  
                             //snap_to_ground: Some(CharacterLength::Absolute(1.)),
                             ..KinematicCharacterController::default()
                         },
@@ -689,7 +695,7 @@ pub fn network_send_delta_position_system(
                 let real_translation = prev_state.translation.lerp(transform.translation, a);
 
                 
-                println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
+                // println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                 //delta_translation != IVec3::ZERO
                 if //&prev_state.rotation != rotation ||
                  delta_translation.x != 0 

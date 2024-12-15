@@ -124,7 +124,7 @@ impl Plugin for PathingPlugin {
         }
 
         pub fn walking_system(
-            mut walking_entities: Query<(Entity, &Transform,  &mut Walking), With<Player>>,
+            mut walking_entities: Query<(Entity, &Transform,  &mut Walking)>,
             mut commands: Commands,
             //map: Res<Map>
         ) {
@@ -546,11 +546,11 @@ pub fn get_next_step(initial: Vec3, goal: Pos, map: &Res<Map>) -> Option<Vec3> {
     );
 
     // Ya esta en el objetivo
-    if(goal.0 as f32 == initial.x && goal.1  as f32 == initial.z) {
+    if goal.0 as f32 == initial.x && goal.1  as f32 == initial.z {
         return None
     }
     // Tile bloqueado
-    if(map.blocked_paths.contains(&goal)) {
+    if map.blocked_paths.contains(&goal) {
         return None
     }
                

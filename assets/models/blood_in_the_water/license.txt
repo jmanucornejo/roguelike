@@ -1,0 +1,11 @@
+Model Information:
+* title:	Blood in the water
+* source:	https://sketchfab.com/3d-models/blood-in-the-water-8f7a2a7ebc22400f882cb505850a1dab
+* author:	nathanmiller5wtue (https://sketchfab.com/nathanmiller5wtue)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Blood in the water" (https://sketchfab.com/3d-models/blood-in-the-water-8f7a2a7ebc22400f882cb505850a1dab) by nathanmiller5wtue (https://sketchfab.com/nathanmiller5wtue) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

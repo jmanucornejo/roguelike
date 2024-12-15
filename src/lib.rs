@@ -336,11 +336,14 @@ pub fn connection_config() -> ConnectionConfig {
 }
 
 
+
+
 pub fn setup_level(
     mut commands: Commands, 
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>,  
     asset_server: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
 
     
@@ -460,7 +463,7 @@ pub fn setup_level(
         SceneBundle {
             scene: tree_handle.clone(),
             transform: Transform {
-                translation: Vec3::new(20.0, 0.0, 20.0),
+                translation: Vec3::new(20.0, -1.0, 20.0),
                 scale: Vec3::splat(0.7),
                 //rotation,
                 ..Default::default()
@@ -473,6 +476,47 @@ pub fn setup_level(
         //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh) 
         )  
     );
+
+    commands.spawn((      
+        SceneBundle {
+            scene: tree_handle.clone(),
+            transform: Transform {
+                translation: Vec3::new(10.0, -1.0, 18.0),
+                scale: Vec3::splat(0.5),
+                //rotation,
+                ..Default::default()
+            },
+            
+            ..Default::default()
+        },
+        Name::new("Palm tree"),
+        MapEntity,
+        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh) 
+        )  
+    );
+
+
+
+
+    /*let blood_handle = asset_server.load("models/light_beam.glb#Scene0");
+
+    commands.spawn((      
+        SceneBundle {
+            scene: blood_handle.clone(),
+            transform: Transform {
+                translation: Vec3::new(10.0, -1.0, 10.0),
+                scale: Vec3::splat(1.0),
+                //rotation,
+                ..Default::default()
+            },
+            
+            ..Default::default()
+        },
+        Name::new("Blood"),
+        MapEntity,
+        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh) 
+        )  
+    );*/
 
 
     // Load textures

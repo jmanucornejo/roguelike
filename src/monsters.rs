@@ -77,7 +77,7 @@ impl Plugin for MonstersPlugin {
 
                     //let texture = asset_server.load("pig.png");
 
-                    let transform = Transform::from_xyz(monster_spawner.pos.0 as f32, 2.0, monster_spawner.pos.1 as f32);  
+                    let transform = Transform::from_xyz(monster_spawner.pos.0 as f32, 0.0, monster_spawner.pos.1 as f32);  
 
                     let texture_atlas = TextureAtlas {
                         layout: assets.layout.clone(),
@@ -99,7 +99,17 @@ impl Plugin for MonstersPlugin {
                             monster_spawner.monster.clone(),
                             monster_spawner.monster_movement.clone(),
                             Name::new("Pig"),
+                            KinematicCharacterController {
+                                offset: CharacterLength::Absolute(0.3),
+                                filter_flags: QueryFilterFlags::EXCLUDE_KINEMATIC,  
+                                //snap_to_ground: Some(CharacterLength::Absolute(1.)),
+                                ..KinematicCharacterController::default()
+                            },
                             Collider::capsule_y(0.5, 0.5),
+                            /*CollisionGroups::new(
+                                Group::GROUP_1,
+                                Group::GROUP_2,
+                            ),*/
                             RigidBody::KinematicPositionBased,
                             //Collider::capsule(0.4, 1.0),
                             )

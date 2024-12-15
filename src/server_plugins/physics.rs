@@ -1,6 +1,6 @@
 
 
-use bevy::prelude::*;
+/*use bevy::prelude::*;
 use crate::*;
 use avian3d::math::{AdjustPrecision, Quaternion, Scalar, Vector};
 use avian3d::prelude::{CoefficientCombine, Collider, ColliderParent, Collisions, Friction, GravityScale, LinearVelocity, LockedAxes, Mass, Position, PostProcessCollisions, Restitution, RigidBody, Rotation, Sensor};
@@ -37,7 +37,7 @@ impl Plugin for ServerPhysicsPlugin {
 
 
 
-pub fn manuel_collisions(
+/*pub fn manuel_collisions(
     collisions: Res<Collisions>,
     collider_parents: Query<&ColliderParent, Without<Sensor>>,
     mut players: Query<(&mut Transform, &mut Position,&mut LinearVelocity, &GameVelocity), (With<RigidBody>, With<Player>)>,
@@ -106,7 +106,7 @@ pub fn manuel_collisions(
             println!("deepest_penetration: {:?}", deepest_penetration); 
         }
     }
-}
+}*/
 
 
 #[allow(clippy::type_complexity)]
@@ -134,7 +134,7 @@ pub fn kinematic_controller_collisions(
         let is_other_dynamic: bool;
        
 
-        let (mut transform, mut position, mut linear_velocity, velocity) =
+        let (mut transform, mut _position, mut linear_velocity, velocity) =
             if let Ok(character) = players.get_mut(collider_parent1.get()) {
                 is_first = true;
                 character_rb = *bodies.get(collider_parent1.get()).unwrap();
@@ -289,3 +289,4 @@ fn apply_gravity(
         //println!("linear_velocity: {:?}", linear_velocity.0); 
     }
 }
+*/
