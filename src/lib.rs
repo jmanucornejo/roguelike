@@ -26,6 +26,7 @@ pub enum AppState {
 }
 
 
+
 pub const PLAYER_MOVE_SPEED: f32 = 10.0;
 pub const LINE_OF_SIGHT: f32 = 12.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
@@ -156,13 +157,31 @@ pub enum MonsterKind {
 }
 
 #[derive(Debug, PartialEq, Component, Clone)]
+pub struct Aggro {
+    pub enemy: Entity,
+    pub auto_attack: bool,
+    pub enemy_translation: Vec3
+}
+
+
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+pub struct Walking {
+    pub target_translation: Vec3,
+    pub path: Option<(Vec<Pos>, u32)>
+}
+
+
+#[derive(Debug, PartialEq, Component, Clone)]
 pub struct Attacking {
     pub enemy: Entity,
     pub auto_attack: bool,
-    pub enemy_translation: Vec3,
-    pub path: Option<(Vec<Pos>, u32)>,
-    pub timer: Timer
+    //pub enemy_translation: Vec3,
+    // pub timer: Timer
 }
+
+#[derive(Debug, PartialEq, Component, Clone)]
+pub struct AttackingTimer(Timer);
 
 #[derive(Component, Reflect, Debug)]
 pub struct Health {
@@ -178,17 +197,7 @@ pub struct Mana {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
-pub struct AttackSpeed {
-    pub enemy: Entity,
-    pub auto_attack: bool,
-    pub enemy_translation: Vec3,
-    pub path: Option<(Vec<Pos>, u32)>
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
-pub struct Walking {
-    pub path: Option<(Vec<Pos>, u32)>
-}
+pub struct AttackSpeed(pub f32);
 
 
 #[derive(Debug, Serialize, Deserialize, Component)]
@@ -229,6 +238,12 @@ pub enum ServerMessages {
         entity: Entity,
         max: u32,
         current: u32
+    },
+    Attack {
+        entity: Entity,
+        enemy: Entity,
+        attack_speed: f32,
+        auto_attack: bool        
     },
     SpawnProjectile {
         entity: Entity,

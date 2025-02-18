@@ -294,7 +294,7 @@ fn server_events(
                             Group::GROUP_1,
                             Group::GROUP_2,
                         ),*/
-                        //Mass(5.0),
+                        //Mass(5.0),                    
                         ActiveCollisionTypes::KINEMATIC_STATIC,
                         RigidBody::KinematicPositionBased,
                         TransformInterpolation::default(),
@@ -309,6 +309,7 @@ fn server_events(
                         //RigidBody::Kinematic     
                         //Collider::capsule(0.5, 1.0),
                     ))
+                    .insert(AttackSpeed(0.5))
                     .insert(PlayerInput::default())
                     .insert(GameVelocity::default())
                     .insert(Facing(0) )                        
@@ -422,13 +423,13 @@ fn server_events(
                             let mut timer = Timer::from_seconds(1.0, TimerMode::Once);
                             timer.pause(); // Timer pausado hasta que este en rango de ataque                      
                             
-                            commands.entity(*player_entity).insert(Attacking {
+                            commands.entity(*player_entity).insert(Aggro {
                                 enemy: monster_entity,
-                                auto_attack: false,
-                                enemy_translation: monster_transform.translation,
-                                path: get_path_between_translations(player_transform.translation, monster_transform.translation, &map),
-                                timer: timer // El timer se debe definir al momento en que ya está en rango. Ya que el aspd puede variar mientras te acercas.
-                           }).remove::<Walking>();
+                                auto_attack: true,
+                                enemy_translation: monster_transform.translation
+                                //path: get_path_between_translations(player_transform.translation, monster_transform.translation, &map),
+                               // timer: timer // El timer se debe definir al momento en que ya está en rango. Ya que el aspd puede variar mientras te acercas.
+                           });
                         }
                     }              
                    
@@ -440,8 +441,12 @@ fn server_events(
             
                         if let Ok((entity, player, player_transform)) = players.get(*player_entity) {
                             commands.entity(*player_entity).insert(Walking {
+                                target_translation: destination_at,
                                 path: get_path_between_translations(player_transform.translation, destination_at, &map),                               
-                            }).remove::<Attacking>(); 
+                            })
+                            .remove::<Aggro>()
+                            .remove::<Attacking>()
+                            .remove::<AttackingTimer>(); 
                         }   
                        
                     }
@@ -472,44 +477,6 @@ pub fn setup_simple_camera(mut commands: Commands) {
     );
 }
 
-
-
-fn click_move_players_system(
-    mut commands: Commands,
-    mut query: Query<(&mut Velocity, &PlayerCommand, &mut Transform, Entity)>,
-    map: Res<Map>
-) {
-    for (mut velocity, command, mut transform, entity) in query.iter_mut() {
-        match command {
-            PlayerCommand::Move { destination_at } => {  
-              
-                /*let start: Pos = Pos(
-                    transform.translation.x.round() as i32, 
-                    transform.translation.z.round() as i32
-                );*/
-                let goal: Pos = Pos(
-                    destination_at.x as i32, 
-                    destination_at.z as i32
-                );    
-
-                let target = get_next_step(transform.translation.into(), goal, &map); 
-
-                if let Some(final_pos) = target {    
-                    println!("final_post click {:?}",final_pos);
-                    //info!("Final Pos: {:?}!", final_pos);    
-                    // Se cambia el punto objetivo.
-                    commands.entity(entity).insert(TargetPos {
-                        position: final_pos,
-                    });
-             
-                }
-            },
-            _  =>{}
-        }
-     
-
-    }
-}
 
 
 
@@ -716,7 +683,6 @@ pub fn network_send_delta_position_system(
 
                     let sync_message = bincode::serialize(&message).unwrap();
                     // Send message to only one client
-
                     //println!("Sent message to client_id {:?} .", player.id);   
                     server.send_message(player.id, ServerChannel::ServerMessages, sync_message);                    
        

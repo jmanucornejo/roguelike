@@ -48,6 +48,18 @@ struct Billboard;
 #[derive(Component)]
 struct Hovered;
 
+#[derive(Component, Debug)]
+enum Animation {
+    Idle,
+    Walking,
+    Attacking {
+        entity: Entity,
+        enemy: Entity,
+        attack_speed: f32,
+        auto_attack: bool
+    },
+    Casting
+}
 
 
 #[derive(Debug)]
@@ -403,6 +415,7 @@ pub fn client_sync_players(
                             height: BarHeight::Static(0.10),
                             ..default()
                         },
+                        Animation::Idle
                         //RigidBody::Kinematic,   
                          //Collider::capsule(0.4, 1.0),
                     ),
@@ -413,6 +426,7 @@ pub fn client_sync_players(
                     client_entity
                         .insert(ControlledPlayer) 
                         //.insert(Billboard)
+                      
                         .insert(GameVelocity::default())
                         .insert(Facing(4) )
                         //.insert(NotShadowCaster)
@@ -590,14 +604,12 @@ pub fn client_sync_players(
                 if let Some(entity) = network_mapping.0.remove(&entity) {
                     commands.entity(entity).despawn_recursive();
                 }
-            }
+            },
             ServerMessages::MoveDelta { entity, x, y,z, server_time} => {
-                //println!("Message received  {} ", server_time);
+           
                 //println!("server_entity {} ", entity);
                 //  println!("network_mapping {:?} ", network_mapping.0);
-                if let Some(client_entity) = network_mapping.0.get(&entity) {
-
-                    //println!("client_entity {} ", client_entity);
+                if let Some(client_entity) = network_mapping.0.get(&entity) {                 
                   
                     if let Ok( (final_entity, transform, mut position_history)) = entities.get_mut(*client_entity) {                    
 
@@ -609,12 +621,23 @@ pub fn client_sync_players(
                         position_history.add_delta(quantized_delta,server_time);       
 
                     }
-                }               
+                }            
             },
             ServerMessages::HealthChange { entity, max, current} => {
-                 println!("Cambio el HP {}, {} ", max, current);
+                // println!("Cambio el HP {}, {} ", max, current);
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
                     commands.entity(*client_entity).insert(Health { max, current });
+                }
+            },
+            ServerMessages::Attack { entity, enemy, attack_speed, auto_attack} => {
+                println!("Entity  {:?} attacking  {:?} with  {:?}  aspd", entity, enemy, attack_speed);
+                if let (Some(client_entity), Some(client_enemy)) = (network_mapping.0.get(&entity), network_mapping.0.get(&enemy)) {
+                    commands.entity(*client_entity).insert(Animation::Attacking { 
+                        entity: *client_entity,
+                        enemy: *client_enemy,
+                        attack_speed: attack_speed,
+                        auto_attack: auto_attack
+                    });
                 }
             }
         }
@@ -879,7 +902,7 @@ fn set_entities_facing(
 
 fn sprite_movement(
     time: Res<Time>,
-    mut q_parent: Query<(&mut AnimationTimer, &mut Facing, &GameVelocity)>,
+    mut q_parent: Query<(&mut AnimationTimer, &mut Facing, &GameVelocity, &mut Animation)>,
     mut q_child: Query<(&Parent, &mut TextureAtlas)>,
     camera_rotation: Res<CameraFacing>
 ) {    
@@ -887,7 +910,10 @@ fn sprite_movement(
    
     for (parent, mut atlas) in q_child.iter_mut() {
 
-        if let Ok ((mut timer, mut facing, velocity)) = q_parent.get_mut(parent.get()) {
+        if let Ok ((mut timer, mut facing, velocity, mut animation)) = q_parent.get_mut(parent.get()) {
+
+
+            //println!("Animation {:?}", animation);  
 
             // Cuando se cambia la rotación, se debe ajustar el sprite.
             if camera_rotation.is_changed() {
@@ -906,6 +932,8 @@ fn sprite_movement(
                 continue;
             }             
       
+          
+
             let x = (velocity.0.x * 1000.0).round() / 1000.0;
             let z = (velocity.0.z * 1000.0).round() / 1000.0;
           

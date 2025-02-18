@@ -48,7 +48,7 @@ impl Plugin for HealthPlugin {
         ) {
 
             for (entity, mut health, mut bar_settings) in query.iter_mut() {
-                println!("Se detectó cambio de  HP {:?}, {:?} ", health, entity);
+                //println!("Se detectó cambio de  HP {:?}, {:?} ", health, entity);
 
                 if(health.max == health.current) {
                     continue;

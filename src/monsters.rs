@@ -57,12 +57,12 @@ impl Plugin for MonstersPlugin {
                     .load_collection::<TestAssets>()
             )
             .add_systems(OnEnter(AppState::InGame), (( setup_map )))
+            /* DESCOMENTAR pAR  Q SE MUEVAN LOS MONSTRUOS 
             .add_systems(
                 FixedUpdate, (
                     monster_movement_timer_reset.run_if(in_state(AppState::InGame)),
-                    // monster_movement.run_if(in_state(AppState::InGame)),
                 )
-            )
+            )*/
             
             .observe(
                 |trigger: Trigger<SpawnMonster>,
@@ -192,8 +192,9 @@ impl Plugin for MonstersPlugin {
                     movement.move_timer = Timer::from_seconds(fastrand::i32(5..10) as f32, TimerMode::Once);
 
                     commands.entity(monster).insert(Walking {
+                        target_translation: move_destination,
                         path: get_path_between_translations(transform.translation, move_destination, &map),                               
-                    }).remove::<Attacking>(); 
+                    }); 
                    
                 }            
            

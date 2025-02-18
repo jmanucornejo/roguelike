@@ -43,10 +43,13 @@ impl Plugin for PathingPlugin {
                 )
             );*/
             .add_systems(
-                FixedUpdate, (                   
-                    get_velocity.before(PhysicsSet::StepSimulation),
+                FixedUpdate, (      
+                    walking_system,
+                    stop_walking_system.before(get_velocity),             
+                    get_velocity.after(stop_walking_system).before(PhysicsSet::StepSimulation),
                     apply_rapier3d_velocity_system.after(get_velocity).before(PhysicsSet::StepSimulation),                  
-                    walking_system
+                
+                    
                 )
             );
 
@@ -123,12 +126,24 @@ impl Plugin for PathingPlugin {
         
         }
 
+ 
+        pub fn stop_walking_system(
+            mut removals: RemovedComponents<Walking>,
+            mut commands: Commands
+        ) {
+            for entity in removals.read() {
+                // do something with the entity
+                commands.entity(entity).remove::<TargetPos>();
+                eprintln!("Entity {:?} had the component removed.", entity);
+            }
+        }
+
         pub fn walking_system(
-            mut walking_entities: Query<(Entity, &Transform,  &mut Walking)>,
+            mut walking_entities: Query<(Entity, &Player, &Transform, &Walking)>,
             mut commands: Commands,
             //map: Res<Map>
         ) {
-            for (entity, transform,  mut walking) in walking_entities.iter_mut() {       
+            for (entity, player, transform, walking ) in walking_entities.iter_mut() {       
 
                 /*info!("1. Ta parado en: {:?},  {:?}", Pos(
                     transform.translation.x.round() as i32, 
@@ -137,6 +152,13 @@ impl Plugin for PathingPlugin {
                 info!("2. Ta lejos. Acercarse!, path: {:?}", walking.path);*/
 
                 if let Some((steps_vec, steps_left)) = walking.path.clone() {
+     
+                    if(walking.target_translation.x == transform.translation.x && walking.target_translation.z as f32 == transform.translation.z) {
+                        info!("Se llegó al final, parar de caminar");
+                        commands.entity(entity).remove::<Walking>();
+                    }
+                
+                
 
                     let current_cell_index: Option<usize>  =  steps_vec.iter().position(|&r| r ==  Pos(
                         transform.translation.x.round() as i32, 
@@ -159,40 +181,12 @@ impl Plugin for PathingPlugin {
                                 });         
                             }
             
-                        }
-                        else {
-                            // Llegó al destino
-                            commands.entity(entity).remove::<Walking>(); 
-                        }
+                        }                        
 
                     }                            
-                    /*else if let Some(goal) = steps_vec.last()  {
-                        info!("3 Se salió del camino!!");                        
-                        walking.path = get_path_between_translations(transform.translation,  Vec3 { x: goal.0 as f32, y: 2.0, z: goal.1 as f32}, &map);    
-
-                        if let Some((steps_vec, steps_left)) = walking.path.clone() {
-
-                            let mut index = 1;
-                    
-                            if(steps_left == 0) {
-                                index = 0;
-                            }   
-                    
-                            if let Some(next_pos) = steps_vec.get(index) {
-
-                                commands.entity(entity).insert(TargetPos {
-                                    position: Vec3 { x: next_pos.0 as f32, y: 2.0, z: next_pos.1 as f32},
-                                });                               
-                         
-                            }
-                           
-                        }   
-                             
-                    }
-                    else {
-                        panic!("Oh no something bad has happened!")
-                    }*/
+            
                 }
+                
             }  
         }
 
@@ -293,12 +287,8 @@ pub fn apply_rapier3d_velocity_system(
         if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
        
             let diff = velocity.0 * delta_time;        
-            //info!("current pos {:?}, target pos {:?}, diff {:?},last {:?}", transform.translation, target_pos.position, diff, time.elapsed().as_millis() );
-           
-
-      
-           
-            
+            info!("current pos {:?}, target pos {:?}, diff {:?},last {:?}", transform.translation, target_pos.position, diff, time.elapsed().as_millis() );
+                      
             if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {                
                 movement.x =  target_pos.position.x - transform.translation.x;
                 //info!("Se paso hacia la derecha  {:?}!", movement.x );                           
@@ -357,14 +347,14 @@ fn read_result_system(controllers: Query<(Entity, &KinematicCharacterControllerO
 }
 
 
-pub fn apply_velocity_system(mut query: Query<(&GameVelocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
+/*pub fn apply_velocity_system(mut query: Query<(&GameVelocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
     for (velocity, mut transform, target_pos) in query.iter_mut() {
         
         if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
 
             //info!("diff  {:?}!", diff);
             //info!("current pos  {:?}!", transform.translation);
-            //info!("target pos  {:?}!", target_pos.position);
+            info!("target pos  {:?}!", target_pos.position);
             //info!("diff  {:?}!", diff);
             let diff = velocity.0 * time.delta_seconds();
             //info!("diff  {:?}!", diff);
@@ -392,7 +382,7 @@ pub fn apply_velocity_system(mut query: Query<(&GameVelocity, &mut Transform, &T
         }
         //transform.translation += velocity.0 * time.delta_seconds();
     }
-}
+}*/
 
 #[allow(unused_parens)]
 pub fn get_astar_successors(current_pos: &Pos, map: &Res<Map>) -> Vec<(Pos, u32)> {
@@ -536,57 +526,4 @@ pub fn calculate_velocity(origin: Vec3, destination: Vec3) -> Vec3 {
     }                            
    
     velocity
-}
-
-pub fn get_next_step(initial: Vec3, goal: Pos, map: &Res<Map>) -> Option<Vec3> {
-
-    let start: Pos = Pos(
-        initial.x.round() as i32, 
-        initial.z.round() as i32
-    );
-
-    // Ya esta en el objetivo
-    if goal.0 as f32 == initial.x && goal.1  as f32 == initial.z {
-        return None
-    }
-    // Tile bloqueado
-    if map.blocked_paths.contains(&goal) {
-        return None
-    }
-               
-
-    //info!("Start   {:?}!  Goal  {:?}!", start,goal);
-
-    //let succesors = get_succesors(&start, &map);                        
-    let astar_result = astar(
-        &start,
-        |p|  get_astar_successors(p, &map),
-        |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
-        |p| *p==goal);
-
-
-    //info!("*Star Result {:?}! ",astar_result);  
-     
-    //if let None = astar_result   
-
-    if let Some((steps_vec, steps_left)) = astar_result {
-
-        let mut index = 1;
-
-        if(steps_left == 0) {
-            index = 0;
-        }   
-
-        if let Some(final_pos) = steps_vec.get(index) {
-        
-            let &Pos(x, z) = final_pos;
-
-            return Some(Vec3 { x: x as f32, y: 2.0, z: z as f32})
-
-        }
-       
-    }   
-   
-    return None
-
 }

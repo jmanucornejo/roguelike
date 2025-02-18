@@ -434,8 +434,8 @@ impl Plugin for SpellAnimationsPlugin {
             
                println!("spell.spell_id {} ", spell.spell_id);
             commands.spawn((SceneBundle {
-                //scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb")),
-                scene:  spell_assets.scene.clone(),
+                scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb")),
+                //scene:  spell_assets.scene.clone(),
                 transform: Transform {
                     translation: spell.translation,
                     scale: Vec3::splat(1.0),

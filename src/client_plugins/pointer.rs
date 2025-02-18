@@ -375,8 +375,7 @@ impl Plugin for PointerPlugin {
         ) {
             //let game_cursor = cursor.get_single_mut();
 
-            if let Ok((cursor, mut img)) =  cursors.get_single_mut() {
-                println!("Changed cursror");
+            if let Ok((cursor, mut img)) =  cursors.get_single_mut() {                
                 match cursor.action {
                     CursorKind::Default => img.texture = asset_server.load("cursors/PNG/01.png").into(),
                     CursorKind::Attack => img.texture = asset_server.load("cursors/PNG/05.png").into(),
