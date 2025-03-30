@@ -358,7 +358,7 @@ pub fn setup_level(
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>,  
     asset_server: Res<AssetServer>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut _graphs: ResMut<Assets<AnimationGraph>>,
 ) {
 
     
@@ -641,7 +641,7 @@ pub fn  move_water(
     time: Res<Time>, 
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    for mut water in water_materials.iter_mut() {
+    for  water in water_materials.iter_mut() {
         water.1.time += time.delta_seconds();
     }
 }

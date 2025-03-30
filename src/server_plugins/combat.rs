@@ -52,7 +52,7 @@ impl Plugin for CombatPlugin {
             time: Res<Time>,
             map: Res<Map>,
         ) {
-            for (entity, attacker_transform,  mut aggroed, mut is_attacking, mut is_walking) in aggroed_entities.iter_mut() {                   
+            for (entity, attacker_transform,  aggroed, is_attacking, mut is_walking) in aggroed_entities.iter_mut() {                   
                 
                 let attack_range:f32 = 1.;
                 // If in range, attack.         
@@ -150,7 +150,7 @@ impl Plugin for CombatPlugin {
             time: Res<Time>,
         ) {  
 
-            for (entity, mut attacking, mut attacking_timer) in attacking_entities.iter_mut() {    
+            for (entity,  attacking, mut attacking_timer) in attacking_entities.iter_mut() {    
                 // Los timers de atraque empiezan detenidos. 
                 // Se inicia cuando ya esta en rango y las validaciones son exitosas
                 if(attacking_timer.0.paused()) {
@@ -406,7 +406,7 @@ impl Plugin for CombatPlugin {
             mut server: ResMut<RenetServer>, 
             players: Query<(&Player, &LineOfSight)>,
             mut entities: Query<(Entity, &Health), Changed<Health>>,
-            time: Res<Time>,
+            //time: Res<Time>,
         ) {
             for (player, line_of_sight) in players.iter() {
             
@@ -444,7 +444,7 @@ pub fn is_in_view_rapier3d(rapier_context: &Res<RapierContext>, origin_translati
            
     };
 
-    if let Some((entity, time_of_impact)) = rapier_context.cast_ray(
+    if let Some((entity, _time_of_impact)) = rapier_context.cast_ray(
         origin_translation, 
         direction, 
         bevy_rapier3d::prelude::Real::MAX, 
