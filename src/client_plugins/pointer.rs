@@ -12,7 +12,7 @@ use crate::*;
 struct GridTarget {
     #[asset(path = "grid-transparent.png")]
     sprite: Handle<Image>,
-}
+}   
 
 #[derive(Component)]
 pub struct Target;
@@ -45,9 +45,14 @@ impl Plugin for PointerPlugin {
                     .continue_to_state(AppState::InGame)
                     .load_collection::<GridTarget>()
             )
-            .add_plugins((DecalPlugin))
+            //.add_plugins((DecalPlugin))
             .add_systems(OnEnter(AppState::Setup), ((setup_cursor)))
-            .add_systems(OnEnter(AppState::InGame), ((setup_target, setup_target_decal)))
+            .add_systems(
+                OnEnter(AppState::InGame), ((
+                    setup_target, 
+                    //setup_target_decal
+                ))
+            )
             .add_systems(Update, (  
                     move_cursor.run_if(in_state(AppState::InGame)),
                     player_input.run_if(in_state(AppState::InGame)),        
@@ -62,7 +67,7 @@ impl Plugin for PointerPlugin {
                 
 
 
-        fn setup_target_decal(
+        /*fn setup_target_decal(
             mut commands: Commands,
             mut meshes: ResMut<Assets<Mesh>>,
             mut materials: ResMut<Assets<StandardMaterial>>,
@@ -91,7 +96,7 @@ impl Plugin for PointerPlugin {
             .insert(NotShadowCaster)
             .insert(NotShadowReceiver)
             .insert(Name::new("Target"));
-        }
+        }*/
         
         fn setup_target(mut commands: Commands,
             assets            : Res<GridTarget>,
@@ -100,36 +105,49 @@ impl Plugin for PointerPlugin {
 
             let texture = assets.sprite.clone();   
             commands
-                .spawn((PbrBundle {
-                    mesh: meshes.add(Mesh::from(Cuboid::new(1., 0., 1.))),
-                    //material: materials.add(Color::srgb(1.0, 0.0, 0.0)),
-                    //material: materials.add((texture, alpha_mode: )),
-                    material:  materials.add(StandardMaterial {
-                        base_color_texture: Some(texture),
-                        //unlit: true,
-                        alpha_mode: AlphaMode::Blend,
-                        ..Default::default()
-                    }),
+                .spawn((
+                    Mesh3d(meshes.add(Mesh::from(Cuboid::new(1., 0., 1.)))),
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                            base_color_texture: Some(texture),
+                            //unlit: true,
+                            alpha_mode: AlphaMode::Blend,
+                            ..Default::default()
+                        }
+                    )),
+                    Transform::from_xyz(0.0, 1., 0.0),
+                    /*PbrBundle {
+                        mesh: meshes.add(Mesh::from(Cuboid::new(1., 0., 1.))),
+                        //material: materials.add(Color::srgb(1.0, 0.0, 0.0)),
+                        //material: materials.add((texture, alpha_mode: )),
+                        material:  materials.add(StandardMaterial {
+                            base_color_texture: Some(texture),
+                            //unlit: true,
+                            alpha_mode: AlphaMode::Blend,
+                            ..Default::default()
+                        }
+                    ),
                     transform: Transform::from_xyz(0.0, 1., 0.0),
                     ..Default::default()
-                },
-                NotShadowCaster, 
-                Name::new("Target old")))
-                ;
+                    },*/
+                    NotShadowCaster, 
+                    Name::new("Target old")
+                ));
 
         
         }
 
         fn shape_cast(
             primary_window: Query<&Window, With<PrimaryWindow>>,
-            rapier_context: Res<RapierContext>,
+            //rapier_context: Res<RapierContext>,
+            read_rapier_context: ReadRapierContext,          
             camera_query: Query<(&Camera, &GlobalTransform)>,
         ) {
             let (camera,camera_transform) = camera_query.single();
+            let rapier_context = read_rapier_context.single();
 
             if let Some(cursor_pos) = primary_window.single().cursor_position() {      
 
-                if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+                if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
 
                     let cam_transform = camera_transform.compute_transform();
                     let direction: Dir3 = ray.direction;
@@ -169,17 +187,20 @@ impl Plugin for PointerPlugin {
             primary_window: Query<&Window, With<PrimaryWindow>>,
             mut target_query: Query<&mut Transform, With<Target>>,
             camera_query: Query<(&Camera,  &GlobalTransform)>,
-            rapier_context: Res<RapierContext>,
+            read_rapier_context: ReadRapierContext,          
+            //rapier_context: Res<RapierContext>,
             interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
             mut cursor: Query<&mut GameCursor>,
         ) {
             let (camera, camera_transform) = camera_query.single();
+
+            let rapier_context = read_rapier_context.single();
             
             let mut target_transform = target_query.single_mut();
             if let Some(cursor_pos) = primary_window.single().cursor_position() {
 
       
-                if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+                if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
 
                     let cam_transform = camera_transform.compute_transform();
                     let direction: Dir3 = ray.direction;
@@ -370,16 +391,16 @@ impl Plugin for PointerPlugin {
         }*/
 
         fn changed_cursor(
-            mut cursors: Query<(&GameCursor, &mut UiImage), (With<GameCursor>,Changed<GameCursor>)>,
+            mut cursors: Query<(&GameCursor, &mut ImageNode), (With<GameCursor>,Changed<GameCursor>)>,
             asset_server: Res<AssetServer>,
         ) {
             //let game_cursor = cursor.get_single_mut();
 
             if let Ok((cursor, mut img)) =  cursors.get_single_mut() {                
                 match cursor.action {
-                    CursorKind::Default => img.texture = asset_server.load("cursors/PNG/01.png").into(),
-                    CursorKind::Attack => img.texture = asset_server.load("cursors/PNG/05.png").into(),
-                    CursorKind::Cast => img.texture = asset_server.load("cursors/PNG/05.png").into(),     
+                    CursorKind::Default => img.image = asset_server.load("cursors/PNG/01.png").into(),
+                    CursorKind::Attack => img.image = asset_server.load("cursors/PNG/05.png").into(),
+                    CursorKind::Cast => img.image = asset_server.load("cursors/PNG/05.png").into(),     
                 }
             }
             /*let (mut img, game_cursor) = cursor.single_mut();
@@ -396,11 +417,22 @@ impl Plugin for PointerPlugin {
             asset_server: Res<AssetServer>,
         ) {
             let mut window: Mut<Window> = windows.single_mut();
-            window.cursor.visible = false;
+            window.cursor_options.visible = false;
             let cursor_spawn: Vec3 = Vec3::ZERO;
 
             commands.spawn((
-                ImageBundle {
+                ImageNode {
+                    image: asset_server.load("cursors/PNG/01.png").into(),
+                    ..default()
+                },
+                Node {
+                    height: Val::Px(32.),
+                    width: Val::Px(32.),
+                    position_type: PositionType::Absolute,
+                    
+                    ..default()
+                },
+                /*ImageBundle {
                     image: asset_server.load("cursors/PNG/01.png").into(),
                     style: Style {
                         //display: Display::None,
@@ -413,7 +445,7 @@ impl Plugin for PointerPlugin {
                     z_index: ZIndex::Global(15),
                     transform: Transform::from_translation(cursor_spawn),
                     ..default()
-                },
+                },*/
                 GameCursor {
                     action: CursorKind::Default,
                     hovered_entity: None
@@ -423,7 +455,7 @@ impl Plugin for PointerPlugin {
 
         fn move_cursor(
             primary_window: Query<&Window, With<PrimaryWindow>>,
-            mut cursor: Query<&mut Style, With<GameCursor>>) {
+            mut cursor: Query<&mut Node, With<GameCursor>>) {
 
             if let Some(position) = primary_window.single().cursor_position() {
                 let mut img_style = cursor.single_mut();

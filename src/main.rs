@@ -73,7 +73,7 @@ fn character_movement(
     time: Res<Time>,
 ) {
     for(mut transform, player) in &mut characters {
-        let movement_amount = player.speed * time.delta_seconds();
+        let movement_amount = player.speed * time.delta_secs();
         
         if input.pressed(KeyCode::KeyW) {
             transform.translation.y += movement_amount;

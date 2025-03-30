@@ -38,7 +38,7 @@ impl Plugin for CombatPlugin {
                     attack.run_if(in_state(AppState::InGame)),
                 )
             )
-            .observe(on_damage);
+            .add_observer(on_damage);
             //.observe(on_attack_animation);
 
 
@@ -47,11 +47,15 @@ impl Plugin for CombatPlugin {
             //attacked_entities: Query<(Entity, &Transform), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
             mut commands: Commands,
             //spatial_query: SpatialQuery,
-            rapier_context: Res<RapierContext>,
+           // rapier_context: Res<RapierContext>,
+            read_rapier_context: ReadRapierContext,            
             map_query: Query<&MapEntity>,
             time: Res<Time>,
             map: Res<Map>,
         ) {
+
+            let rapier_context = read_rapier_context.single();
+
             for (entity, attacker_transform,  aggroed, is_attacking, mut is_walking) in aggroed_entities.iter_mut() {                   
                 
                 let attack_range:f32 = 1.;
@@ -433,7 +437,13 @@ impl Plugin for CombatPlugin {
 
 }
 
-pub fn is_in_view_rapier3d(rapier_context: &Res<RapierContext>, origin_translation: Vec3, target_translation: Vec3, target_entity: Entity, map_query: &Query<&MapEntity>) -> bool {
+pub fn is_in_view_rapier3d(
+    rapier_context: &RapierContext, 
+    origin_translation: Vec3, 
+    target_translation: Vec3, 
+    target_entity: Entity, 
+    map_query: &Query<&MapEntity>
+) -> bool {
 
     let direction = (target_translation - origin_translation).normalize_or_zero();
   
@@ -467,7 +477,7 @@ pub fn is_in_view_rapier3d(rapier_context: &Res<RapierContext>, origin_translati
     return false;
 }
 
-
+/*
 pub fn is_in_view_avian3d(spatial_query: &SpatialQuery, origin_translation: Vec3, target_translation: Vec3, target_entity: Entity, map_query: &Query<&MapEntity>) -> bool {
 
     let xyz = (target_translation - origin_translation).normalize_or_zero();
@@ -505,7 +515,7 @@ pub fn is_in_view_avian3d(spatial_query: &SpatialQuery, origin_translation: Vec3
     }
    
     return false;
-}
+}*/
 
 pub fn is_in_attack_range(attack_range: f32, attacker_translation: Vec3, attacked_translation: Vec3) -> bool {
 

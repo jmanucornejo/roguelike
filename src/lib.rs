@@ -386,13 +386,16 @@ pub fn setup_level(
     ));*/
 
     commands.spawn((
-        PbrBundle {
+        Mesh3d(meshes.add(Mesh::from(Cuboid::new(3., 5., 11.)))),
+        MeshMaterial3d(materials.add(Color::srgb(0.3, 0.5, 0.3))),
+        Transform::from_xyz(0.0, 0.99, 0.0),
+        /*PbrBundle {
             mesh: meshes.add(Mesh::from(Cuboid::new(3., 5., 11.))),
             //material: material,
             material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
             transform: Transform::from_xyz(0.0, 0.99, 0.0),
             ..Default::default()
-        },  
+        },  */
         Name::new("Wall"),  
         MapEntity,
         // Rapier3d Settings
@@ -474,8 +477,15 @@ pub fn setup_level(
 
     let tree_handle = asset_server.load("models/palm_tree.glb#Scene0");
 
-    commands.spawn((      
-        SceneBundle {
+    commands.spawn((    
+        SceneRoot(tree_handle.clone()),
+        Transform {
+            translation: Vec3::new(20.0, -1.0, 20.0),
+            scale: Vec3::splat(0.7),
+            //rotation,
+            ..Default::default()
+        },   
+        /*SceneBundle {
             scene: tree_handle.clone(),
             transform: Transform {
                 translation: Vec3::new(20.0, -1.0, 20.0),
@@ -485,15 +495,22 @@ pub fn setup_level(
             },
             
             ..Default::default()
-        },
+        },*/
         Name::new("Palm tree"),
         MapEntity,
         //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh) 
         )  
     );
 
-    commands.spawn((      
-        SceneBundle {
+    commands.spawn((    
+        SceneRoot(tree_handle.clone()),
+        Transform {
+            translation: Vec3::new(10.0, -1.0, 18.0),
+            scale: Vec3::splat(0.5),
+            //rotation,
+            ..Default::default()
+        },  
+        /*SceneBundle {
             scene: tree_handle.clone(),
             transform: Transform {
                 translation: Vec3::new(10.0, -1.0, 18.0),
@@ -503,7 +520,7 @@ pub fn setup_level(
             },
             
             ..Default::default()
-        },
+        },*/
         Name::new("Palm tree"),
         MapEntity,
         //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh) 
@@ -558,7 +575,15 @@ pub fn setup_level(
     let collider = Collider::from_bevy_mesh(m.unwrap(), &ComputedColliderShape::TriMesh).unwrap();*/
     //let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");
     commands.spawn((
-        SceneBundle {
+        SceneRoot(scene_handle.clone()),
+        Transform {
+            translation: Vec3::new(0.0, 0.0, 0.0),
+            //scale: Vec3::splat(25.0),
+            //rotation,
+            ..Default::default()
+        },
+
+        /*SceneBundle {
             scene: scene_handle.clone(),
             transform: Transform {
                 translation: Vec3::new(0.0, 0.0, 0.0),
@@ -567,7 +592,7 @@ pub fn setup_level(
                 ..Default::default()
             },
             ..Default::default()
-        },
+        },*/
         Name::new("Map"),
         MapEntity,
         RigidBody::Fixed,
@@ -578,7 +603,7 @@ pub fn setup_level(
        // handle: scene_handle,
         // `TriMesh` gives us the most accurate collisions, at the cost of
         // physics complexity.
-        shape: Some(ComputedColliderShape::TriMesh),
+        shape: Some(ComputedColliderShape::TriMesh(TriMeshFlags::default())),
         named_shapes: HashMap::default(),
     });
     
@@ -642,7 +667,7 @@ pub fn  move_water(
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     for  water in water_materials.iter_mut() {
-        water.1.time += time.delta_seconds();
+        water.1.time += time.delta_secs();
     }
 }
 
@@ -677,12 +702,18 @@ pub fn spawn_fireball(
         direction = Vec3::X;
     }
     commands
-        .spawn(PbrBundle {
-            mesh: meshes.add(Sphere { radius: 0.1 }),
-            material: materials.add(Color::srgb(1.0, 0.0, 0.0)),
-            transform: Transform::from_translation(translation),
-            ..Default::default()
-        })
+      
+        .spawn((
+            Mesh3d(meshes.add(Sphere { radius: 0.1 })),
+            MeshMaterial3d(materials.add(Color::srgb(1.0, 0.0, 0.0))),
+            Transform::from_translation(translation),
+            /*PbrBundle {
+                mesh: meshes.add(Sphere { radius: 0.1 }),
+                material: materials.add(Color::srgb(1.0, 0.0, 0.0)),
+                transform: Transform::from_translation(translation),
+                ..Default::default()
+            }*/
+        ))
         .insert(GameVelocity(direction * 10.))
         .insert(Projectile {
             duration: Timer::from_seconds(1.5, TimerMode::Once),

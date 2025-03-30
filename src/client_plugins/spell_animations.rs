@@ -63,7 +63,7 @@ impl Plugin for SpellAnimationsPlugin {
                 cast_spell.run_if(in_state(AppState::InGame)),
                // remove_spell_shadows.before(animate_targets)
             ))
-            .observe(on_cast_spell);     
+            .add_observer(on_cast_spell);     
            
 
         
@@ -109,19 +109,27 @@ impl Plugin for SpellAnimationsPlugin {
         
         
              // Fox
-            commands.spawn((SceneBundle {
-                scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/light_beam.glb")),
-                transform: Transform {
+            commands.spawn((
+                SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/light_beam.glb"))),
+                Transform {
                     translation: Vec3::new(10.0, -1.0, 10.0),
                     scale: Vec3::splat(1.0),
                     //rotation,
                     ..Default::default()
-                },    
-                ..default()
-                
-            },            
-            NotShadowCaster, 
-            Name::new("Cast")));
+                },
+                /*SceneBundle {
+                    scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/light_beam.glb")),
+                    transform: Transform {
+                        translation: Vec3::new(10.0, -1.0, 10.0),
+                        scale: Vec3::splat(1.0),
+                        //rotation,
+                        ..Default::default()
+                    },    
+                    ..default()
+                    
+                },    */        
+                NotShadowCaster, 
+                Name::new("Cast")));
 
 
 
@@ -158,19 +166,27 @@ impl Plugin for SpellAnimationsPlugin {
         
         
              // Fox
-            commands.spawn((SceneBundle {
-                scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb")),
-                transform: Transform {
+            commands.spawn((
+                SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb"))),
+                Transform {
                     translation: Vec3::new(5.0, -1.0, 5.0),
                     scale: Vec3::splat(1.0),
                     //rotation,
                     ..Default::default()
-                },    
-                ..default()
-                
-            },            
-            NotShadowCaster, 
-            Name::new("Cast")));
+                },
+                /*SceneBundle {
+                    scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb")),
+                    transform: Transform {
+                        translation: Vec3::new(5.0, -1.0, 5.0),
+                        scale: Vec3::splat(1.0),
+                        //rotation,
+                        ..Default::default()
+                    },    
+                    ..default()
+                    
+                },      */      
+                NotShadowCaster, 
+                Name::new("Cast")));
 
 
             
@@ -199,7 +215,15 @@ impl Plugin for SpellAnimationsPlugin {
             });*/
         
              // Fox
-            commands.spawn((SceneBundle {
+            commands.spawn((
+                SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/yellow_aura/scene.glb"))),
+                Transform {
+                    translation: Vec3::new(5.0, -1.0, 10.0),
+                    scale: Vec3::splat(1.0),
+                    //rotation,
+                    ..Default::default()
+                },
+                /*SceneBundle {
                 scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/yellow_aura/scene.glb")),
                 transform: Transform {
                     translation: Vec3::new(5.0, -1.0, 10.0),
@@ -209,9 +233,9 @@ impl Plugin for SpellAnimationsPlugin {
                 },    
                 ..default()
                 
-            },            
-            NotShadowCaster, 
-            Name::new("Cast")));
+                },   */         
+                NotShadowCaster, 
+                Name::new("Cast")));
 
             
             let mut graph4 = AnimationGraph::new();
@@ -240,19 +264,27 @@ impl Plugin for SpellAnimationsPlugin {
             });*/
             // println!("graphs {} ", graphs);
 
-            commands.spawn((SceneBundle {
-                scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/magical_orb/scene.glb")),
-                transform: Transform {
+            commands.spawn((
+                SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/magical_orb/scene.glb"))),
+                Transform {
                     translation: Vec3::new(8.0, 2.0, 7.0),
                     scale: Vec3::splat(1.0),
                     //rotation,
                     ..Default::default()
-                },    
-                ..default()
-                
-            },            
-            NotShadowCaster, 
-            Name::new("Cast")));
+                },
+                /*SceneBundle {
+                    scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/magical_orb/scene.glb")),
+                    transform: Transform {
+                        translation: Vec3::new(8.0, 2.0, 7.0),
+                        scale: Vec3::splat(1.0),
+                        //rotation,
+                        ..Default::default()
+                    },    
+                    ..default()
+                    
+                },  */          
+                NotShadowCaster, 
+                Name::new("Cast")));
        
 
             commands.insert_resource(SpellAnimations(spell_animations));
@@ -332,7 +364,7 @@ impl Plugin for SpellAnimationsPlugin {
 
                     commands
                         .entity(entity)
-                        .insert(animations.0[spell_id].graph.clone())
+                        .insert(AnimationGraphHandle(animations.0[spell_id].graph.clone()))
                         .insert(transitions);
                         
                 }
@@ -433,22 +465,30 @@ impl Plugin for SpellAnimationsPlugin {
 
             
                println!("spell.spell_id {} ", spell.spell_id);
-            commands.spawn((SceneBundle {
-                scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb")),
-                //scene:  spell_assets.scene.clone(),
-                transform: Transform {
+            commands.spawn((
+                SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb"))),
+                Transform {
                     translation: spell.translation,
                     scale: Vec3::splat(1.0),
                     //rotation,
                     ..Default::default()
-                },    
-               
-                ..default()
+                },
+                /*SceneBundle {
+                    scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/blue_aura/scene.glb")),
+                    //scene:  spell_assets.scene.clone(),
+                    transform: Transform {
+                        translation: spell.translation,
+                        scale: Vec3::splat(1.0),
+                        //rotation,
+                        ..Default::default()
+                    },    
                 
-            },                  
-            SpellId(spell.spell_id),
-            NotShadowCaster, 
-            Name::new("Cast")));
+                    ..default()
+                
+                },   */               
+                SpellId(spell.spell_id),
+                NotShadowCaster, 
+                Name::new("Cast")));
         }
     }
 

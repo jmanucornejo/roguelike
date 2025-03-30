@@ -64,7 +64,7 @@ impl Plugin for MonstersPlugin {
                 )
             )*/
             
-            .observe(
+            .add_observer(
                 |trigger: Trigger<SpawnMonster>,
                 parent: Query<Entity, With<MonsterParent>>,               
                 assets            : Res<TestAssets>,
@@ -86,12 +86,13 @@ impl Plugin for MonstersPlugin {
 
                     commands.entity(parent).with_children(|commands| {
                         commands.spawn((
-                            Sprite3d {
+
+                            transform,
+                            Sprite3dBuilder {
                                 image: assets.sprite.clone(),
                                 pixels_per_metre: 32.,
                                 alpha_mode: AlphaMode::Blend,
                                 unlit: true,
-                                transform: transform,
                                 // pivot: Some(Vec2::new(0.5, 0.5)),
                 
                                 ..default()

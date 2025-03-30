@@ -250,7 +250,7 @@ pub fn kinematic_controller_collisions(
 
                 // Compute the impulse to apply.
                 let impulse_magnitude = normal_speed
-                    - (deepest_penetration / time.delta_seconds_f64().adjust_precision());
+                    - (deepest_penetration / time.delta_secs_f64().adjust_precision());
                 let mut impulse = impulse_magnitude * normal;
 
                 // Apply the impulse differently depending on the slope angle.
@@ -280,7 +280,7 @@ fn apply_gravity(
 ) {
     // Precision is adjusted so that the example works with
     // both the `f32` and `f64` features. Otherwise you don't need this.
-    let delta_time = time.delta_seconds();
+    let delta_time = time.delta_secs();
     let gravity = Vector::NEG_Y * 9.81 * 2.0;
 
     for (mut velocity, mut linear_velocity) in &mut players {

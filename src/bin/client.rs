@@ -308,14 +308,13 @@ fn draw_player_sprites(
         
         let sprite_entity = commands.spawn(
             (
-                       
-                Sprite3d {
+                Transform::from_xyz(0., -1.0, 0.),   
+                Sprite3dBuilder {
                     image: chaski.sprite.clone(),
                     pixels_per_metre: 48.,
                     //pixels_per_metre: 128.,
                     alpha_mode: AlphaMode::Blend,
-                    unlit: true,
-                    transform: Transform::from_xyz(0., -1.0, 0.),
+                    unlit: true,                   
                     // transform: Transform::from_xyz(0., 0., 0.),
                     //pivot: Some(Vec2::new(0.5, 0.5)),
                     pivot: Some(Vec2::new(0.5, 0.)), // para que gire sobre los pies y no del centro.
@@ -498,18 +497,20 @@ pub fn client_sync_players(
              
 
                 let mut monster_entity = commands.spawn((
-                    Sprite3d {
+                    
+                    Sprite3dBuilder  {
                         image: pig_assets.sprite.clone(),
                         pixels_per_metre: 25.,
                         alpha_mode: AlphaMode::Blend,
                         unlit: true,
-                        transform: Transform::from_translation(translation.into()),
+                        //transform: Transform::from_translation(translation.into()),
                         // pivot: Some(Vec2::new(0.5, 0.5)),
         
                         ..default()
                     }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
                     kind,
                     Name::new("Pig"),
+                    Transform::from_translation(translation.into()),
                    
                     )
                 );       
@@ -539,16 +540,16 @@ pub fn client_sync_players(
      
 
                 let mut client_entity = commands.spawn((
-                    Sprite3d {
+                    Sprite3dBuilder {
                         image: seal_assets.sprite.clone(),
                         pixels_per_metre: 25.,
                         alpha_mode: AlphaMode::Blend,
                         unlit: true,
-                        transform: Transform::from_translation(translation.into()),
                         // pivot: Some(Vec2::new(0.5, 0.5)),
         
                         ..default()
                     }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
+                    Transform::from_translation(translation.into()),
                     MonsterKind::Pig,
                     Collider::capsule_y(0.5, 0.5),
                     /*CollisionGroups::new(

@@ -110,7 +110,7 @@ fn pig_movement(
         
         //info!("Current direction: ${:?}", direction);
 
-        let movement_amount = pig.speed * time.delta_seconds();        
+        let movement_amount = pig.speed * time.delta_secs();        
        
 
         match direction {

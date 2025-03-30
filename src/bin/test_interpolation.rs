@@ -176,7 +176,7 @@ fn player_movement(
     let Ok((transform, mut controller, output)) = player.get_single_mut() else {
         return;
     };
-    let delta_time = time.delta_seconds();
+    let delta_time = time.delta_secs();
     // Retrieve input
     let mut movement = Vec3::new(input.x, 0.0, input.z) * MOVEMENT_SPEED;
     let jump_speed = input.y * JUMP_SPEED;

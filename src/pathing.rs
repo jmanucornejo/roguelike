@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, render::mesh::MeshAabb};
 use pathfinding::prelude::{astar, bfs};
 use crate::*;
 
@@ -54,7 +54,9 @@ impl Plugin for PathingPlugin {
             );
 
             
-        fn setup_gravity(mut rapier_config: ResMut<RapierConfiguration>) {
+        fn setup_gravity(mut rapier_config: Query<&mut RapierConfiguration>) {
+
+            let mut rapier_config = rapier_config.single_mut();
             rapier_config.gravity = Vec3::new(0.0, -9.81, 0.0);      
             /*rapier_config.timestep_mode = TimestepMode::Fixed { 
                 dt: 1.0 / 240.0,
@@ -73,7 +75,8 @@ impl Plugin for PathingPlugin {
         Esto podria pre-hacerse y simplemente dejar el array listo en el mapa. Para ahorrar calcularlo cada vez.. total. El mapa nunca cambia.
         */
         pub fn setup_prohibited_cells(
-            map_entities: Query<(&MapEntity, &Handle<Mesh>, &Collider, &Transform)>,
+            //map_entities: Query<(&MapEntity, &Handle<Mesh>, &Collider, &Transform)>,
+            map_entities: Query<(&MapEntity, &Mesh3d, &Collider, &Transform)>,
             mut meshes: ResMut<Assets<Mesh>>,
             mut map: ResMut<Map>
         ) {
@@ -81,6 +84,7 @@ impl Plugin for PathingPlugin {
 
                 let mesh = meshes.get_mut(mesh_handle).unwrap();
 
+                
                 let aabb = mesh.compute_aabb();
 
                 if let Some(aabb) = aabb {
@@ -224,7 +228,7 @@ impl Plugin for PathingPlugin {
     
         if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
             info!("linear_velocity  {:?}!", linear_velocity);
-            let diff = linear_velocity.0 * time.delta_seconds();
+            let diff = linear_velocity.0 * time.delta_secs();
             info!("diff  {:?}!", diff);
             
             if(target_pos.position.x > transform.translation.x &&  transform.translation.x + diff.x > target_pos.position.x) {
@@ -249,7 +253,7 @@ impl Plugin for PathingPlugin {
                 info!("Se detiene z  {:?}!", linear_velocity);
             }
         }
-        //transform.translation += velocity.0 * time.delta_seconds();
+        //transform.translation += velocity.0 * time.delta_secs();
     }
 }*/
 
@@ -274,7 +278,7 @@ pub fn apply_rapier3d_velocity_system(
     for (velocity, mut transform, prev_state,  target_pos, mut controller, output) in query.iter_mut() {
         
         let mut movement = Vec3::default();
-        let delta_time = time.delta_seconds();
+        let delta_time = time.delta_secs();
 
         if output.map(|o| o.grounded).unwrap_or(false) {
             //info!("Esta en el piso !");
@@ -333,7 +337,7 @@ pub fn apply_rapier3d_velocity_system(
         else if(controller.translation !=  None){
             controller.translation = None;
         }
-        //transform.translation += velocity.0 * time.delta_seconds();
+        //transform.translation += velocity.0 * time.delta_secs();
     }
 }
 
@@ -356,7 +360,7 @@ fn read_result_system(controllers: Query<(Entity, &KinematicCharacterControllerO
             //info!("current pos  {:?}!", transform.translation);
             info!("target pos  {:?}!", target_pos.position);
             //info!("diff  {:?}!", diff);
-            let diff = velocity.0 * time.delta_seconds();
+            let diff = velocity.0 * time.delta_secs();
             //info!("diff  {:?}!", diff);
             
             if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {
@@ -380,7 +384,7 @@ fn read_result_system(controllers: Query<(Entity, &KinematicCharacterControllerO
                 transform.translation.z +=  diff.z;
             }
         }
-        //transform.translation += velocity.0 * time.delta_seconds();
+        //transform.translation += velocity.0 * time.delta_secs();
     }
 }*/
 

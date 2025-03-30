@@ -19,11 +19,10 @@ impl Plugin for MusicPlugin {
         fn setup_music(asset_server: Res<AssetServer>, mut commands: Commands) {
 
             commands.spawn((
-                AudioBundle {
-                    source: asset_server.load("audio/music/tribute.ogg"),
-                    settings: PlaybackSettings::LOOP,
-                    //..default()
-                },
+                AudioPlayer::new(
+                    asset_server.load("audio/music/tribute.ogg"),
+                ),
+                PlaybackSettings::LOOP,
                 MyMusic,
             ));            
             

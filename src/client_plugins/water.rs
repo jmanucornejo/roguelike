@@ -24,7 +24,7 @@ impl Plugin for WaterPlugin {
             let mesh = Mesh::from(Rectangle::default());
 
 
-            commands.spawn((MaterialMeshBundle {
+            /*commands.spawn((MaterialMeshBundle {
                 mesh: meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.0))),
                 material: water_materials.add(ExtendedMaterial {
                     base: StandardMaterial {
@@ -61,7 +61,7 @@ impl Plugin for WaterPlugin {
                 transform:Transform::from_scale(Vec3::splat(100.0)),
                 ..default()
             }
-            ));
+            ));*/
 
             /*commands.spawn((MaterialMeshBundle { 
                 mesh: meshes.add(mesh),

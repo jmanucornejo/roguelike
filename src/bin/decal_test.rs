@@ -29,7 +29,7 @@ fn move_camera(
 ) {
     for mut transform in &mut query {
         if input.pressed(KeyCode::KeyA) {
-            transform.translation.x += 1.0 * time.delta_seconds();
+            transform.translation.x += 1.0 * time.delta_secs();
         }
     }
 }
