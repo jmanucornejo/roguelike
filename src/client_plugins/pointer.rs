@@ -3,9 +3,14 @@ use bevy::{pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, window::Primar
 use bevy_asset_loader::prelude::*;
 use bevy_panorbit_camera::PanOrbitCamera;
 use client_plugins::shared::*;
-use bevy_contact_projective_decals::{decal_mesh_quad, DecalBundle, DecalMaterial, DecalPlugin};
+//use bevy_contact_projective_decals::{decal_mesh_quad, DecalBundle, DecalMaterial, DecalPlugin};
 use bevy::pbr::ExtendedMaterial;
 use crate::*;
+use shared::components::*;
+use shared::messages::*;
+use shared::states::ClientState;
+//use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
+
 // use avian3d::{parry::shape, prelude::*};
 
 #[derive(AssetCollection, Resource)]
@@ -41,62 +46,65 @@ impl Plugin for PointerPlugin {
         // add things to your app here
         app          
             .add_loading_state(
-                LoadingState::new(AppState::Setup)
-                    .continue_to_state(AppState::InGame)
+                LoadingState::new(ClientState::Setup)                    
                     .load_collection::<GridTarget>()
             )
             //.add_plugins((DecalPlugin))
-            .add_systems(OnEnter(AppState::Setup), ((setup_cursor)))
+            .add_systems(OnEnter(ClientState::InGame), ((setup_cursor)))
             .add_systems(
-                OnEnter(AppState::InGame), ((
-                    setup_target, 
-                    //setup_target_decal
+                OnEnter(ClientState::InGame), ((
+                    //setup_target, 
+                    setup_target_decal
                 ))
             )
             .add_systems(Update, (  
-                    move_cursor.run_if(in_state(AppState::InGame)),
-                    player_input.run_if(in_state(AppState::InGame)),        
+                    move_cursor.run_if(in_state(ClientState::InGame)),
+                    player_input.run_if(in_state(ClientState::InGame)),        
                 )
             )           
             .add_systems(FixedUpdate, (       
-                    shape_cast.run_if(in_state(AppState::InGame)),
-                    update_cursor_system_rapier3d.run_if(in_state(AppState::InGame)),
-                    changed_cursor.run_if(in_state(AppState::InGame)).after(setup_cursor),
+                    shape_cast.run_if(in_state(ClientState::InGame)),
+                    update_cursor_system_rapier3d.run_if(in_state(ClientState::InGame)),
+                    changed_cursor.run_if(in_state(ClientState::InGame)).after(setup_cursor),
                 )
             );
                 
 
 
-        /*fn setup_target_decal(
+        fn setup_target_decal(
             mut commands: Commands,
             mut meshes: ResMut<Assets<Mesh>>,
             mut materials: ResMut<Assets<StandardMaterial>>,
-            mut decal_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DecalMaterial>>>,
+            //mut decal_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DecalMaterial>>>,
             asset_server: Res<AssetServer>,
         ) {
-            commands.spawn(DecalBundle {
-                transform: Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(11.0)),
-                decal_material: decal_materials.add(ExtendedMaterial::<StandardMaterial, DecalMaterial> {
-                    base: StandardMaterial {
-                        base_color_texture: Some(asset_server.load("grid_whitespace_big.png")),
-                        //base_color_texture: Some(asset_server.load("blast.png")),
-                        //base_color: Color::Srgba(Srgba::RED),
-                        alpha_mode: AlphaMode::Blend,
-                        ..default()
-                    },
-                    extension: DecalMaterial {
-                        depth_fade_factor:0.0,
-                    },
-                }),
-                mesh: meshes.add(decal_mesh_quad(Vec3::Y)),
-                
-                ..default()
-            })
-            .insert(Target)
-            .insert(NotShadowCaster)
-            .insert(NotShadowReceiver)
-            .insert(Name::new("Target"));
-        }*/
+            commands.spawn((
+                /*DecalBundle {
+                    transform: Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(11.0)),
+                    decal_material: decal_materials.add(ExtendedMaterial::<StandardMaterial, DecalMaterial> {
+                        base: StandardMaterial {
+                            base_color_texture: Some(asset_server.load("grid_whitespace_big.png")),
+                            //base_color_texture: Some(asset_server.load("blast.png")),
+                            //base_color: Color::Srgba(Srgba::RED),
+                            alpha_mode: AlphaMode::Blend,
+                            ..default()
+                        },
+                        extension: DecalMaterial {
+                            depth_fade_factor:0.0,
+                        },
+                    }),
+                    mesh: meshes.add(decal_mesh_quad(Vec3::Y)),
+                    
+                    ..default()
+                }*/
+                Transform::from_xyz(0.0, 1., 0.0),
+                Target,
+                NotShadowCaster,
+                NotShadowReceiver,
+                Name::new("Target")
+                )
+            );
+        }
         
         fn setup_target(mut commands: Commands,
             assets            : Res<GridTarget>,
@@ -129,6 +137,7 @@ impl Plugin for PointerPlugin {
                     transform: Transform::from_xyz(0.0, 1., 0.0),
                     ..Default::default()
                     },*/
+                    Target,
                     NotShadowCaster, 
                     Name::new("Target old")
                 ));
@@ -226,7 +235,7 @@ impl Plugin for PointerPlugin {
                         {
                             // The first collider hit has the entity `entity`. The `hit` is a
                             // structure containing details about the hit configuration.
-                            
+                           
 
                             if let Some( details) = hit.details {
                                 let mut translation = ray.origin + *ray.direction * time_of_impact;
@@ -235,6 +244,11 @@ impl Plugin for PointerPlugin {
                                 //translation.y =  translation.y + 0.15; 
                                 translation.y = details.witness1.y.round();
                                 target_transform.translation = translation;
+
+                                /*println!(
+                                    "target_transform.translation: {:?}",
+                                    translation
+                                );*/
                             }
                             
                             /*println!(

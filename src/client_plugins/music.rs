@@ -1,7 +1,8 @@
 
 use bevy::prelude::*;
 use crate::*;
-
+use client_plugins::shared::*;
+use shared::states::ClientState;
 
 #[derive(Component)]
 struct MyMusic;
@@ -13,7 +14,7 @@ impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         // add things to your app here
         app          
-            .add_systems(OnEnter(AppState::InGame), (setup_music));
+            .add_systems(OnEnter(ClientState::InGame), (setup_music));
 
 
         fn setup_music(asset_server: Res<AssetServer>, mut commands: Commands) {

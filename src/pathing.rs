@@ -1,6 +1,8 @@
 use bevy::{prelude::*, render::mesh::MeshAabb};
 use pathfinding::prelude::{astar, bfs};
 use crate::*;
+use shared::components::*;
+use shared::constants::*;
 
 pub struct PathingPlugin;
 
@@ -138,16 +140,16 @@ impl Plugin for PathingPlugin {
             for entity in removals.read() {
                 // do something with the entity
                 commands.entity(entity).remove::<TargetPos>();
-                eprintln!("Entity {:?} had the component removed.", entity);
+                eprintln!("Entity {:?} removed walking component", entity);
             }
         }
 
         pub fn walking_system(
-            mut walking_entities: Query<(Entity, &Player, &Transform, &Walking)>,
+            mut walking_entities: Query<(Entity, &Transform, &Walking)>,
             mut commands: Commands,
             //map: Res<Map>
         ) {
-            for (entity, player, transform, walking ) in walking_entities.iter_mut() {       
+            for (entity,  transform, walking ) in walking_entities.iter_mut() {       
 
                 /*info!("1. Ta parado en: {:?},  {:?}", Pos(
                     transform.translation.x.round() as i32, 
@@ -291,7 +293,7 @@ pub fn apply_rapier3d_velocity_system(
         if(transform.translation.x != target_pos.position.x || transform.translation.z != target_pos.position.z) {
        
             let diff = velocity.0 * delta_time;        
-            info!("current pos {:?}, target pos {:?}, diff {:?},last {:?}", transform.translation, target_pos.position, diff, time.elapsed().as_millis() );
+            // info!("current pos {:?}, target pos {:?}, diff {:?},last {:?}", transform.translation, target_pos.position, diff, time.elapsed().as_millis() );
                       
             if(target_pos.position.x >= transform.translation.x &&  transform.translation.x + diff.x >= target_pos.position.x) {                
                 movement.x =  target_pos.position.x - transform.translation.x;
@@ -483,23 +485,6 @@ pub fn get_path_between_translations(origin_translation: Vec3, destination_trans
 
 }
 
-fn get_succesors(current_pos: &Pos, mut map: &ResMut<Map>) -> Vec<Pos> {
-
-    let &Pos(x, z) = current_pos;
-
-    let blocked_paths = &map.blocked_paths;
-    //info!("blocked_paths   {:?}!", blocked_paths);
-    let mut possible_positions =  vec![Pos(x+1,z+1), Pos(x+1,z), Pos(x+1,z-1), Pos(x,z+1),
-    Pos(x,z-1), Pos(x-1,z-1), Pos(x-1,z+1), Pos(x-1,z)];
-
-    possible_positions.retain(|pos| !blocked_paths.contains(&pos));
-
-
-    //info!("possible_positions   {:?}!", possible_positions);
-    // se le agrega el peso
-    possible_positions
-
-}
 
 pub fn calculate_velocity(origin: Vec3, destination: Vec3) -> Vec3 {
 

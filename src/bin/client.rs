@@ -4,8 +4,7 @@ use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::pbr::NotShadowReceiver;
 // use avian3d::math::Scalar;
 // use avian3d::prelude::*;
-use bevy_atmosphere::plugin::*;
-
+use bevy_atmosphere::prelude::*;
 use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
@@ -13,6 +12,12 @@ use client_plugins::interpolation::*;
 use client_plugins::pointer::*;
 use client_plugins::client_clock_sync::*;
 use client_plugins::shared::*;
+use shared::components::*;
+use shared::channels::*;
+use shared::constants::*;
+use shared::messages::*;
+use shared::states::ClientState;
+use std::ops::Mul;
 
 use bevy_health_bar3d::configuration::ForegroundColor;
 use bevy_health_bar3d::prelude::{
@@ -23,10 +28,13 @@ use roguelike::*;
 
 use bevy::{  
     asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
-pub use bevy_renet::renet::transport::ClientAuthentication;
-use bevy_renet::{renet::*, transport::NetcodeClientPlugin};
+// pub use bevy_renet::renet::transport::ClientAuthentication;
+pub use bevy_renet::netcode::{
+    ClientAuthentication, NetcodeClientPlugin
+};
+use bevy_renet::renet::*;
 use bevy_renet::*;
-use bevy_renet::renet::transport::NetcodeClientTransport;
+use bevy_renet::netcode::*;
 use std::f32::consts::TAU;
 use std::{
     collections::{HashMap, VecDeque}, net::{SocketAddr, UdpSocket}, time::{Duration, SystemTime}
@@ -40,6 +48,8 @@ use bevy::input::common_conditions::input_toggle_active;
 // use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TouchControls};
 use bevy_rapier3d::prelude::*;
+
+
 
 
 #[derive(Component)]
@@ -159,20 +169,20 @@ fn main() {
             }),
             ..default()   
         }))
-        .init_state::<AppState>()
+        .init_state::<ClientState>()
         .add_loading_state(
-            LoadingState::new(AppState::Setup)
-                .continue_to_state(AppState::InGame)
+            LoadingState::new(ClientState::Setup)                
                 .load_collection::<MyAssets>()
                 .load_collection::<PigAssets>()
-                .load_collection::<SealAssets>()
-           
+                .load_collection::<SealAssets>()           
                 .load_collection::<ChaskiAssets>()
                 .load_collection::<SkyboxAssets>()
+                .continue_to_state(ClientState::InMenu)
         )
         .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
         )
+        .add_plugins(client_plugins::menu::MenuPlugin) 
         .add_plugins(ObjPlugin) 
         .add_plugins((PanOrbitCameraPlugin, MaterialPlugin::<WaterMaterial>::default()))
         // .add_plugins(LookTransformPlugin)
@@ -193,14 +203,14 @@ fn main() {
         })
         .insert_resource(Map::default())
         .insert_resource(NetworkMapping::default())
-        .insert_resource(ServerTime::default())
-        .insert_resource(ClockOffset::default())
+        
         .add_event::<PlayerCommand>()
         .add_plugins(NetcodeClientPlugin)   
-        .add_systems(OnEnter(AppState::InGame), (setup_level, setup_camera, move_water))
+        .add_systems(OnEnter(ClientState::InGame), (setup_level, setup_camera, move_water))
         .add_plugins(Sprite3dPlugin)
         .add_plugins((
             InterpolationPlugin, 
+            //client_plugins::clock_sync::ClockSyncPlugin,
             ClientClockSyncPlugin,
             //client_plugins::music::MusicPlugin, 
             client_plugins::pointer::PointerPlugin,
@@ -209,30 +219,24 @@ fn main() {
             //client_plugins::water::WaterPlugin,
         ))      
         .add_systems(Update, 
-            (
-               
-                // print_hits.run_if(in_state(AppState::InGame)).after(update_cursor_system),
-     
-                //camera_zoom.run_if(in_state(AppState::InGame)),
-                client_send_input.run_if(in_state(AppState::InGame)),              
-                
-                client_send_player_commands.run_if(in_state(AppState::InGame)),
-                billboard.run_if(in_state(AppState::InGame)),
-                set_camera_facing.run_if(in_state(AppState::InGame)),
-                set_entities_facing.run_if(in_state(AppState::InGame)),
-               
+            (               
+                client_send_input.run_if(in_state(ClientState::InGame)),                              
+                client_send_player_commands.run_if(in_state(ClientState::InGame)),
+                billboard.run_if(in_state(ClientState::InGame)),
+                set_camera_facing.run_if(in_state(ClientState::InGame)),
+                set_entities_facing.run_if(in_state(ClientState::InGame))               
             )
         )  
         .add_systems(
-            FixedUpdate, (        
-                
-                client_sync_players.run_if(in_state(AppState::InGame)),
-                draw_player_sprites.run_if(in_state(AppState::InGame)).after(client_sync_players),
-                camera_follow.run_if(in_state(AppState::InGame)),
-                sprite_movement.run_if(in_state(AppState::InGame)),
+            FixedUpdate, (                        
+                client_sync_players.run_if(in_state(ClientState::InGame)),
+                draw_player_sprites.run_if(in_state(ClientState::InGame)).after(client_sync_players),
+                camera_follow.run_if(in_state(ClientState::InGame)),
+                sprite_movement.run_if(in_state(ClientState::InGame)),
 
             )
         );
+        //.add_systems(FixedUpdate, (debug_current_gamemode_state));
             
     create_renet_transport(&mut app);
        
@@ -240,7 +244,9 @@ fn main() {
 }
 
 
-
+fn _debug_current_gamemode_state(state: Res<State<ClientState>>) {
+    eprintln!("Current state: {:?}", state.get());
+}
 
 fn create_renet_transport(app: &mut App)  {
 
@@ -306,7 +312,7 @@ fn draw_player_sprites(
             index: 32,
         };
         
-        let sprite_entity = commands.spawn(
+        /*let sprite_entity = commands.spawn(
             (
                 Transform::from_xyz(0., -1.0, 0.),   
                 Sprite3dBuilder {
@@ -322,9 +328,24 @@ fn draw_player_sprites(
                 }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),
                 Name::new("PlayerSprite"),
                 Billboard
-            )).id();
+            )).id();*/
 
-        commands.entity(entity).push_children(&[sprite_entity]);
+        commands.entity(entity).with_child((
+            Transform::from_xyz(0., -1.0, 0.),   
+            Sprite3dBuilder {
+                image: chaski.sprite.clone(),
+                pixels_per_metre: 48.,
+                //pixels_per_metre: 128.,
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,                   
+                // transform: Transform::from_xyz(0., 0., 0.),
+                //pivot: Some(Vec2::new(0.5, 0.5)),
+                pivot: Some(Vec2::new(0.5, 0.)), // para que gire sobre los pies y no del centro.
+                ..default()
+            }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),
+            Name::new("PlayerSprite"),
+            Billboard
+        ));
 
         println!("Draw player sprite {:?}", transform);     
 
@@ -333,7 +354,7 @@ fn draw_player_sprites(
 }
   
 
-pub fn client_sync_players(
+fn client_sync_players(
     mut commands: Commands,
     //mut meshes: ResMut<Assets<Mesh>>,
     //mut materials: ResMut<Assets<StandardMaterial>>,
@@ -347,7 +368,7 @@ pub fn client_sync_players(
     seal_assets            : Res<SealAssets>,
     mut sprite_params : Sprite3dParams,       
     mut entities: Query<(Entity, &Transform, &mut PositionHistory)>, 
-    mut server_time_res: ResMut<ServerTime>,
+    mut render_time: ResMut<RenderTime>,
 ) {
     let client_id = client_id.0;
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
@@ -364,12 +385,15 @@ pub fn client_sync_players(
                 
                 let mut client_entity = commands.spawn(
             (
-                        PbrBundle {
+                        Mesh3d(sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.)))),
+                        MeshMaterial3d(sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.0))),
+                        Transform::from_xyz(translation[0], translation[1], translation[2]),
+                        /*PbrBundle {
                             mesh: sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.))),
                             material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.0)),
                             transform: Transform::from_xyz(translation[0], translation[1], translation[2]),
                             ..Default::default()
-                        },  
+                        }, */ 
                         /*Sprite3d {
                             image: chaski.sprite.clone(),
                             pixels_per_metre: 48.,
@@ -421,7 +445,7 @@ pub fn client_sync_players(
                         
                 );
 
-                if client_id == id.raw() {
+                if client_id == id {
                     client_entity
                         .insert(ControlledPlayer) 
                         //.insert(Billboard)
@@ -429,7 +453,7 @@ pub fn client_sync_players(
                         .insert(GameVelocity::default())
                         .insert(Facing(4) )
                         //.insert(NotShadowCaster)
-                        .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+0.0, z: translation[2]}))
+                        .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+0.0, z: translation[2]}, render_time.0))
                         .insert(AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
 
                     //server_time_res.0 = server_time;
@@ -463,12 +487,17 @@ pub fn client_sync_players(
 
                 //let mut meshes = sprite_params.meshes.clone();
 
-                let projectile_entity = commands.spawn(PbrBundle {
+                let projectile_entity = commands.spawn((
+                    Mesh3d(sprite_params.meshes.add(Mesh::from(Sphere::new(0.1)))),
+                    MeshMaterial3d(sprite_params.materials.add(Color::srgb(1.0, 0.0, 0.0))),
+                    Transform::from_translation(translation.into()),
+                ));
+                /*PbrBundle {
                     mesh: sprite_params.meshes.add(Mesh::from(Sphere::new(0.1))),
                     material: sprite_params.materials.add(Color::srgb(1.0, 0.0, 0.0)),
                     transform: Transform::from_translation(translation.into()),
                     ..Default::default()
-                });
+                }*/
                 network_mapping.0.insert(entity, projectile_entity.id());
             }
             ServerMessages::DespawnProjectile { entity } => {
@@ -518,7 +547,7 @@ pub fn client_sync_players(
                 monster_entity                
                     //.insert(Billboard)
                     .insert(GameVelocity::default())
-                    .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
+                    .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, render_time.0))
                     .insert(Facing(4))
                     ;
 
@@ -589,7 +618,7 @@ pub fn client_sync_players(
                     })
                     //.insert(Billboard)
                     .insert(GameVelocity::default())
-                    .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}))
+                    .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, render_time.0))
                     .insert(Facing(0));
 
                 /*let client_entity = commands.spawn(PbrBundle {
@@ -606,6 +635,7 @@ pub fn client_sync_players(
                     commands.entity(entity).despawn_recursive();
                 }
             },
+            #[cfg(not(feature = "absolute_interpolation"))]
             ServerMessages::MoveDelta { entity, x, y,z, server_time} => {
            
                 //println!("server_entity {} ", entity);
@@ -620,6 +650,26 @@ pub fn client_sync_players(
                             z: z
                         };       
                         position_history.add_delta(quantized_delta,server_time);       
+
+                    }
+                }            
+            },
+            #[cfg(feature = "absolute_interpolation")]
+            ServerMessages::MoveAbsolute { entity, x, y,z, server_time} => {
+                
+                
+                //println!("server_entity {} ", entity);
+                //  println!("network_mapping {:?} ", network_mapping.0);
+                if let Some(client_entity) = network_mapping.0.get(&entity) {                 
+                  
+                    if let Ok( (final_entity, transform, mut position_history)) = entities.get_mut(*client_entity) {                    
+
+                        let quantized_transform = IVec3 { 
+                            x: x,
+                            y: y,
+                            z: z
+                        };       
+                        position_history.add_absolute_position(quantized_transform.as_vec3().mul(TRANSLATION_PRECISION),server_time);       
 
                     }
                 }            
@@ -764,10 +814,12 @@ fn setup_camera(
         commands.spawn((
             // Note we're setting the initial position below with yaw, pitch, and radius, hence
             // we don't set transform on the camera.
-            Camera3dBundle {
+            Camera3d::default(),
+            Transform::from_translation(Vec3::new(0.0, 25.5, 5.0)),
+            /*Camera3dBundle {
                 transform: Transform::from_translation(Vec3::new(0.0, 25.5, 5.0)),
                 ..default()
-            },
+            },*/
             PanOrbitCamera {
                  // Panning the camera changes the focus, and so you most likely want to disable
                 // panning when setting the focus manually
@@ -830,14 +882,16 @@ fn set_camera_facing(
  
     if let Ok((mut camera_transform, pan_cam)) = camera_query.get_single_mut() {
         if let Some(yaw) = pan_cam.yaw {
-         
+          
             let mut rotation = ((8.0 * (yaw.to_degrees()) / 360.0).round() % 8.0) as i32;
+            
             if(rotation < 0) {
                 rotation += 8;
             }
 
             if(rotation as u8 != camera_facing.0) {
                 camera_facing.0 = rotation as u8;    
+                println!("camera_facing {:?}", camera_facing.0);
             }
               
         }        
@@ -904,27 +958,31 @@ fn set_entities_facing(
 fn sprite_movement(
     time: Res<Time>,
     mut q_parent: Query<(&mut AnimationTimer, &mut Facing, &GameVelocity, &mut Animation)>,
-    mut q_child: Query<(&Parent, &mut TextureAtlas)>,
+    mut q_child: Query<(&Parent, &mut Sprite3d)>,
     camera_rotation: Res<CameraFacing>
 ) {    
 
    
-    for (parent, mut atlas) in q_child.iter_mut() {
+    for (parent, mut sprite) in q_child.iter_mut() {
 
+        
         if let Ok ((mut timer, mut facing, velocity, mut animation)) = q_parent.get_mut(parent.get()) {
 
 
             //println!("Animation {:?}", animation);  
-
+           
             // Cuando se cambia la rotación, se debe ajustar el sprite.
             if camera_rotation.is_changed() {
 
-                let col_index = atlas.index  % 8;
-                println!("col_index {:?}", col_index);  
+                if let Some(atlas) = &mut sprite.texture_atlas {
 
-                let row_index = camera_rotation.0+facing.0;
-                println!("row_index {:?}", row_index);  
-                atlas.index = col_index + (( row_index * 8) % 64) as usize;
+                    let col_index = atlas.index  % 8;
+                    println!("col_index {:?}", col_index);  
+
+                    let row_index = camera_rotation.0+facing.0;
+                    println!("row_index {:?}", row_index);  
+                    atlas.index = col_index + (( row_index * 8) % 64) as usize;
+                }
             
             }
 
@@ -954,12 +1012,14 @@ fn sprite_movement(
                     let a = (starting_row_animation)..(starting_row_animation + 7);
 
                     //println!("range {:?}, atlas.index {:?}",a ,atlas.index );  
-                    atlas.index = if !a.contains(&atlas.index) || atlas.index == ((row_index*8)+7) {
-                        starting_row_animation
+                    if let Some(atlas) = &mut sprite.texture_atlas {
+                        atlas.index = if !a.contains(&atlas.index) || atlas.index == ((row_index*8)+7) {
+                            starting_row_animation
+                        }
+                        else {
+                            atlas.index + 1
+                        };
                     }
-                    else {
-                        atlas.index + 1
-                    };
 
                 
                 }

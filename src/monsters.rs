@@ -2,10 +2,13 @@ use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 use pathing::*;
 use crate::*;
+use shared::components::*;
+use shared::states::ServerState;
 use rand::prelude::*;
 use bevy_sprite3d::*;
 use pathfinding::prelude::{astar, bfs};
 use std::ops::Div;
+
 pub struct MonstersPlugin;
 
 #[derive(Component)]
@@ -46,23 +49,23 @@ impl Plugin for MonstersPlugin {
         app
             .add_systems(
             Startup, (
-                    spawn_monster_parent,
+                    spawn_monster_parent
                               
                 )            
             )
             .add_plugins(Sprite3dPlugin)
             .add_loading_state(
-                LoadingState::new(AppState::Setup)                  
-                    .continue_to_state(AppState::InGame)
+                LoadingState::new(ServerState::Initializing)
                     .load_collection::<TestAssets>()
+                    .continue_to_state(ServerState::InGame)
             )
-            .add_systems(OnEnter(AppState::InGame), (( setup_map )))
-            /* DESCOMENTAR pAR  Q SE MUEVAN LOS MONSTRUOS 
+            .add_systems(OnExit(ServerState::Initializing), (( setup_map )))
+            // DESCOMENTAR pAR  Q SE MUEVAN LOS MONSTRUOS 
             .add_systems(
                 FixedUpdate, (
-                    monster_movement_timer_reset.run_if(in_state(AppState::InGame)),
+                    monster_movement_timer_reset.run_if(in_state(ServerState::InGame)),
                 )
-            )*/
+            )
             
             .add_observer(
                 |trigger: Trigger<SpawnMonster>,
@@ -146,7 +149,7 @@ impl Plugin for MonstersPlugin {
             map: ResMut<Map>
         ) {          
 
-
+            println!("Spawning monsters");
             for _i in 1..40 {
              
                 let pos = Pos(fastrand::i32(-20..20),fastrand::i32(-20..20));

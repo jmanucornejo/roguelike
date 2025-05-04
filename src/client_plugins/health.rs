@@ -5,8 +5,9 @@ use bevy_health_bar3d::prelude::BarSettings;
 use crate::*;
 use bevy_health_bar3d::prelude::{ColorScheme, ForegroundColor, HealthBarPlugin, Percentage};
 use bevy::color::palettes::basic::*;
-use bevy::color::palettes::css::*;
-
+// use bevy::color::palettes::css::*;
+use shared::components::*;
+use shared::states::ClientState;
 
 impl Percentage for Health {
     fn value(&self) -> f32 {
@@ -37,7 +38,7 @@ impl Plugin for HealthPlugin {
             .insert_resource(ColorScheme::<Mana>::new().foreground_color(ForegroundColor::Static(BLUE.into())))
             .add_systems(
                 FixedUpdate, (
-                    show_monster_health.run_if(in_state(AppState::InGame)),
+                    show_monster_health.run_if(in_state(ClientState::InGame)),
                 )
             );
 

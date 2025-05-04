@@ -2,61 +2,20 @@ pub mod pathing;
 pub mod monsters;
 pub mod client_plugins;
 pub mod server_plugins;
+pub mod shared;
 
 // use avian3d::{parry::shape, prelude::*};
 use bevy_spatial::{kdtree::KDTree3};
 use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}, utils::HashMap};
 use bevy_renet::renet::*;
-use bevy_renet::*;
 use serde::{Deserialize, Serialize};
+use shared::components::*;
 use std::{f32::consts::PI, time::Duration};
 use bevy::render::render_resource::{ShaderStages, ShaderType};
 use bevy::reflect::TypePath;
 
 use bevy_rapier3d::{prelude::*};
 
-// 0.14 (Solution 1)
-#[derive(States, Default, Hash, Debug, PartialEq, Clone, Eq)]
-pub enum AppState {
-    // Make this the default instead of `InMenu`.
-    #[default]
-    Setup,
-    _InMenu,
-    InGame,
-}
-
-
-
-pub const PLAYER_MOVE_SPEED: f32 = 10.0;
-pub const LINE_OF_SIGHT: f32 = 12.0;
-pub const TRANSLATION_PRECISION: f32 = 0.001;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ClientMessage {
-    SyncTimeRequest  {
-        client_time: u128
-    },
-    LatencyRequest  {
-        client_time: u128
-    },
-}
-
-
-
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ServerMessage {
-    SyncTimeResponse  {
-        client_time: u128,
-        server_time: u128
-    },
-    LatencyResponse  {
-        client_time: u128
-    }
-}
-
-#[derive(Debug, Default, Component)]
-pub struct GameVelocity(pub Vec3);
 
 
 #[derive(Component, Debug)]
@@ -65,8 +24,6 @@ pub struct PrevState {
     pub rotation: Facing
 }
 
-#[derive(Debug, Default, Component, Deserialize, Serialize,Clone)]
-pub struct SpriteId(pub u16);
 
 
 #[derive(Debug, Default, Component)]
@@ -93,9 +50,6 @@ pub struct MovementDelta {
 
 
 
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Component, Clone)]
-pub struct Facing(pub u8);
-
 #[derive(Debug, Component)]
 pub struct Player {
     pub id: ClientId,
@@ -107,33 +61,6 @@ pub struct NPC {
 }
 
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, Component, Resource)]
-pub struct PlayerInput {
-    pub up: bool,
-    pub down: bool,
-    pub left: bool,
-    pub right: bool,
-    pub destination_at: Option<Pos>
-}
-
-#[derive(Debug, Serialize, Deserialize, Event)]
-pub enum PlayerCommand {
-    Move { destination_at: Vec3 },
-    BasicAttack { entity: Entity },
-    Cast { cast_at: Vec3 }
-}
-
-pub enum ClientChannel {
-    Input,
-    Command,
-    SyncTimeRequest
-}
-pub enum ServerChannel {
-    ServerMessages,
-    NetworkedEntities,
-    SyncTimeResponse
-}
-
 
 #[derive(Component)]
 pub struct NearestNeighbourComponent;
@@ -141,118 +68,11 @@ pub struct NearestNeighbourComponent;
 pub type NNTree = KDTree3<NearestNeighbourComponent>;
 
 
-#[derive(Debug, PartialEq, Component, Clone)]
-pub struct Monster {
-    pub hp: i32,
-    //pub speed: f32,
-    pub kind: MonsterKind,
-   // pub move_destination: Vec3,
-    //pub move_timer: Timer
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
-pub enum MonsterKind {
-    Pig,
-    Orc,
-}
-
-#[derive(Debug, PartialEq, Component, Clone)]
-pub struct Aggro {
-    pub enemy: Entity,
-    pub auto_attack: bool,
-    pub enemy_translation: Vec3
-}
-
-
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
-pub struct Walking {
-    pub target_translation: Vec3,
-    pub path: Option<(Vec<Pos>, u32)>
-}
-
-
-#[derive(Debug, PartialEq, Component, Clone)]
-pub struct Attacking {
-    pub enemy: Entity,
-    pub auto_attack: bool,
-    //pub enemy_translation: Vec3,
-    // pub timer: Timer
-}
-
-#[derive(Debug, PartialEq, Component, Clone)]
-pub struct AttackingTimer(Timer);
-
-#[derive(Component, Reflect, Debug)]
-pub struct Health {
-    pub max: u32,
-    pub current: u32,
-}
-
-
-#[derive(Component, Reflect, Debug)]
-pub struct Mana {
-    pub max: u32,
-    pub current: u32,
-}
-
 #[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
 pub struct AttackSpeed(pub f32);
 
 
-#[derive(Debug, Serialize, Deserialize, Component)]
-pub enum ServerMessages {
-    PlayerCreate {
-        entity: Entity,
-        id: ClientId,
-        translation: [f32; 3],
-        server_time: u128
-    },
-    SpawnMonster {
-        entity: Entity,
-        kind: MonsterKind,
-        translation: [f32; 3],
-        server_time: u128
-    },
-    SpawnEntity {
-        entity: Entity,
-        sprite_id: SpriteId,
-        translation: [f32; 3],
-        facing: Facing
-    },
-    PlayerRemove {
-        id: ClientId,
-    },
-    DespawnEntity {
-        entity: Entity,
-    },
-    MoveDelta {
-        entity: Entity,
-        x: i32,
-        y: i32,
-        z: i32,
-        server_time: u128,
-        //real_translation: [f32; 3],
-    },
-    HealthChange {
-        entity: Entity,
-        max: u32,
-        current: u32
-    },
-    Attack {
-        entity: Entity,
-        enemy: Entity,
-        attack_speed: f32,
-        auto_attack: bool        
-    },
-    SpawnProjectile {
-        entity: Entity,
-        translation: [f32; 3],
-    },
-    DespawnProjectile {
-        entity: Entity,
-    },
-}
+
 
 #[derive(Component, Debug)]
 pub struct MapEntity; 
@@ -267,88 +87,7 @@ pub struct NetworkedEntities {
     pub translations: Vec<[f32; 3]>,
 }
 
-pub const PROTOCOL_ID: u64 = 1000;
 
-
-
-impl From<ClientChannel> for u8 {
-    fn from(channel_id: ClientChannel) -> Self {
-        match channel_id {
-            ClientChannel::Command => 0,
-            ClientChannel::Input => 1,
-            ClientChannel::SyncTimeRequest => 2,
-        }
-    }
-}
-
-impl ClientChannel {
-    pub fn channels_config() -> Vec<ChannelConfig> {
-        vec![
-            ChannelConfig {
-                channel_id: Self::Input.into(),
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::ReliableOrdered {
-                    resend_time: Duration::ZERO,
-                },
-            },
-            ChannelConfig {
-                channel_id: Self::Command.into(),
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::ReliableOrdered {
-                    resend_time: Duration::ZERO,
-                },
-            },
-            ChannelConfig {
-                channel_id: Self::SyncTimeRequest.into(),
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::Unreliable
-            },
-        ]
-    }
-}
-
-impl From<ServerChannel> for u8 {
-    fn from(channel_id: ServerChannel) -> Self {
-        match channel_id {
-            ServerChannel::NetworkedEntities => 0,
-            ServerChannel::ServerMessages => 1,
-            ServerChannel::SyncTimeResponse => 2,
-        }
-    }
-}
-
-impl ServerChannel {
-    pub fn channels_config() -> Vec<ChannelConfig> {
-        vec![
-            ChannelConfig {
-                channel_id: Self::NetworkedEntities.into(),
-                max_memory_usage_bytes: 10 * 1024 * 1024,
-                send_type: SendType::Unreliable,
-            },
-            ChannelConfig {
-                channel_id: Self::ServerMessages.into(),
-                max_memory_usage_bytes: 10 * 1024 * 1024,
-                send_type: SendType::ReliableOrdered {
-                    resend_time: Duration::from_millis(200),
-                },
-            },
-            ChannelConfig {
-                channel_id: Self::SyncTimeResponse.into(),
-                max_memory_usage_bytes: 10 * 1024 * 1024,
-                send_type: SendType::Unreliable
-            },
-        ]
-    }
-}
-
-
-pub fn connection_config() -> ConnectionConfig {
-    ConnectionConfig {
-        available_bytes_per_tick: 1024 * 1024,
-        client_channels_config: ClientChannel::channels_config(),
-        server_channels_config: ServerChannel::channels_config(),
-    }
-}
 
 
 
@@ -671,18 +410,6 @@ pub fn  move_water(
     }
 }
 
-#[derive(Debug, Default, Resource)]
-pub struct Map {
-    pub blocked_paths: Vec<Pos>
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord,  Copy, Serialize, Deserialize, PartialEq, PartialOrd)]
-pub struct Pos(pub i32, pub i32);
-
-#[derive(Debug, Component)]
-pub struct Building {
-    pub blocked_paths: Vec<Pos>,
-}
 
 
 

@@ -37,3 +37,6 @@ renet_visualizer = { version = "1.0.0", features = ["bevy"] }
 serde = { version = "1.0.204", features = ["derive"] }
 smooth-bevy-cameras = "0.13.0"
 
+[features]
+default = ["absolute_interpolation"]
+absolute_interpolation = []

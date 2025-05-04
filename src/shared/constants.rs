@@ -1,0 +1,6 @@
+pub const CLOCK_SYNC_CHANNEL_ID: u8 = 10;
+pub const PROTOCOL_ID: u64 = 1000;
+pub const PLAYER_MOVE_SPEED: f32 = 10.0;
+pub const LINE_OF_SIGHT: f32 = 12.0;
+pub const TRANSLATION_PRECISION: f32 = 0.001;
+pub const INTERPOLATE_BUFFER: u128 = 200;

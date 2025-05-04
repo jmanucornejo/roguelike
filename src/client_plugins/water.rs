@@ -1,7 +1,10 @@
 
-use bevy::{color::palettes::css::BLACK, math::vec4, pbr::{ExtendedMaterial, MaterialExtension}, prelude::*, render::texture::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor}};
+use bevy::{color::palettes::css::BLACK, math::vec4, pbr::{ExtendedMaterial, MaterialExtension}, prelude::*, 
+render::texture::{
+    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor
+}};
 use crate::*;
-
+use shared::states::ClientState;
 
 
 pub struct WaterPlugin;
@@ -11,7 +14,7 @@ impl Plugin for WaterPlugin {
         // add things to your app here
         app     
             .add_plugins((MaterialPlugin::<ExtendedMaterial<StandardMaterial, Water>>::default()))     
-            .add_systems(OnEnter(AppState::InGame), (setup_water_mesh));
+            .add_systems(OnEnter(ClientState::InGame), (setup_water_mesh));
 
 
         fn setup_water_mesh(

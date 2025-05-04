@@ -14,15 +14,21 @@ use bevy_obj::ObjPlugin;
 
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
-use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
+
+use bevy_renet::netcode::{
+    NetcodeServerPlugin, NetcodeServerTransport, NetcodeTransportError,
+    ServerAuthentication, ServerConfig,
+};
+//use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use bevy_renet::renet::{ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
-use bevy_renet::transport::NetcodeServerPlugin;
+//use bevy_renet::transport::NetcodeServerPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy::input::common_conditions::input_toggle_active;
 use bevy_renet::RenetServerPlugin;
 use local_ip_address::local_ip;
 use monsters::*;
 use pathing::*;
+
 use roguelike::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
@@ -37,7 +43,11 @@ use bevy_spatial::{kdtree::KDTree3, AutomaticUpdate, SpatialAccess};
 use renet_visualizer::{RenetServerVisualizer, RenetVisualizerStyle};
 use bevy_egui::{EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
-
+use shared::components::*;
+use shared::channels::*;
+use shared::constants::*;
+use shared::messages::*;
+use shared::states::ServerState;
 
 #[derive(Debug, Default, Resource)]
 pub struct ServerLobby {
@@ -45,9 +55,10 @@ pub struct ServerLobby {
 }
 
 fn main() {
-    App::new()   
+
+    let mut app =  App::new();     
        
-        .add_plugins(DefaultPlugins.set(LogPlugin {
+    app.add_plugins(DefaultPlugins.set(LogPlugin {
             filter: "info,wgpu_core=warn,wgpu_hal=off,rechannel=warn".into(),
             level: bevy::log::Level::DEBUG,
             ..Default::default()
@@ -75,11 +86,12 @@ fn main() {
                 // setup_prohibited_areas.after(setup_level),
             )
         )
-        .init_state::<AppState>()
+        .init_state::<ServerState>()
         .add_plugins((
             //server_plugins::physics::ServerPhysicsPlugin, 
             MonstersPlugin, 
             server_plugins::server_clock_sync::ServerClockSyncPlugin,
+            // server_plugins::clock_server::ClockServerPlugin, // new
             server_plugins::combat::CombatPlugin
         ))
         .add_plugins(RenetServerPlugin)
@@ -101,23 +113,22 @@ fn main() {
             )
         )
         .add_systems(
-            FixedUpdate, ( 
-                //server_network_sync_player_out,    
+            FixedUpdate, (           
                 //network_send_delta_position_system.after(roguelike::pathing::apply_rapier3d_velocity_system),      
                 //network_send_delta_position_system.after(TransformSystem::TransformPropagate),     
                 //network_send_delta_position_system.after(PhysicsSet::Writeback),    
-               // network_send_delta_rapier3d_position_system.after(apply_rapier3d_velocity_system).before(PhysicsSet::StepSimulation),
                 // network_send_delta_position_system.after(apply_velocity_system),
-                //read_translation_system.after(PhysicsSet::StepSimulation),    
                 //network_send_delta_position_system,  
                 //click_move_players_system,
                 line_of_sight
                 //monster_test
             )
         )
-        .add_systems(FixedPostUpdate,    network_send_delta_position_system)
-        //.add_systems(PostUpdate, (projectile_on_removal_system, read_translation_system2.after(run_physics_schedule)
-        //.before(TransformSystem::TransformPropagate)))
+     
+        .insert_resource(TimestepMode::Fixed {
+            dt: 1.0 / 60.0,  // 60 FPS physics update
+            substeps: 1,
+        })
         .add_systems(
             PhysicsSchedule,
             (
@@ -137,9 +148,16 @@ fn main() {
                 PhysicsSet::Writeback,
             ).chain());
         })
-        .add_systems(FixedUpdate, run_physics_schedule.before(roguelike::pathing::get_velocity))
+        .add_systems(FixedUpdate, run_physics_schedule.before(roguelike::pathing::get_velocity));
        
-        .run();
+        #[cfg(not(feature = "absolute_interpolation"))]
+        app.add_systems(FixedPostUpdate,    (network_send_delta_position_system));
+        
+        #[cfg(feature = "absolute_interpolation")]
+        app.add_systems(FixedPostUpdate, (network_send_absolute_position_system));
+
+        app.run();
+    
 }
 
 
@@ -202,7 +220,7 @@ fn create_renet_transport() -> NetcodeServerTransport {
 
 fn update_visualizer_system(mut egui_contexts: EguiContexts, mut visualizer: ResMut<RenetServerVisualizer<200>>, server: Res<RenetServer>) {
     visualizer.update(&server);
-    visualizer.show_window(egui_contexts.ctx_mut());
+    //visualizer.show_window(egui_contexts.ctx_mut());
 }
 
 
@@ -280,12 +298,15 @@ fn server_events(
                 // Spawn new player              
                 let player_entity = commands
                     .spawn((
-                        PbrBundle {
+                        Mesh3d(meshes.add(Mesh::from(Capsule3d::new(0.5, 1.)))),
+                        MeshMaterial3d(materials.add(Color::srgb(0.8, 0.7, 0.6))),
+                        transform,
+                        /*PbrBundle {
                             mesh: meshes.add(Mesh::from(Capsule3d::new(0.5, 1.))),
                             material: materials.add(Color::srgb(0.8, 0.7, 0.6)),
                             transform,
                             ..Default::default()
-                        },  
+                        },  */
                         LockedAxes::ROTATION_LOCKED,
                         //Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
                         //Restitution::ZERO.with_combine_rule(CoefficientCombine::Min), 
@@ -326,7 +347,7 @@ fn server_events(
                 // Esto se puede mejorar... no debería ser necesario loopear por todas las cosas cercanas al jugador. 
                 // Solo comparar el Vec3 del jugador existente con el Vec3 del nuevo jugador
                 // Si están a menos de 12, spawnear.
-                for (_entity, player, player_transform) in players.iter() {
+                for (_entity, player, _player_transform) in players.iter() {
 
                     for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
                         // info!("entity {:?}", entity);
@@ -416,7 +437,7 @@ fn server_events(
                     
                     if let (Some(player_entity)) = lobby.players.get_mut(&client_id) {
 
-                        if let (Ok((entity, player, player_transform)), Ok((monster_entity, monster,  monster_transform))) = (players.get(*player_entity), monsters.get(entity)) {
+                        if let (Ok((_entity, _player, _player_transform)), Ok((monster_entity, _monster,  monster_transform))) = (players.get(*player_entity), monsters.get(entity)) {
 
                             println!("Player entity {:?} attacking monster_entity {:?}", player_entity, monster_entity);
 
@@ -434,12 +455,13 @@ fn server_events(
                     }              
                    
                 },
-                PlayerCommand::Move { mut destination_at } => {
+                PlayerCommand::Move { destination_at } => {
                     println!("Received move action from client {}: {:?}", client_id, destination_at);
                 
-                    if let Some(mut player_entity) = lobby.players.get_mut(&client_id) {
-            
-                        if let Ok((entity, player, player_transform)) = players.get(*player_entity) {
+                    if let Some(player_entity) = lobby.players.get_mut(&client_id) {
+                        println!("Existe jugador");
+                        if let Ok((_entity, _player, player_transform)) = players.get(*player_entity) {
+                            println!("Existe transform: {:?}", player_transform);
                             commands.entity(*player_entity).insert(Walking {
                                 target_translation: destination_at,
                                 path: get_path_between_translations(player_transform.translation, destination_at, &map),                               
@@ -480,147 +502,43 @@ pub fn setup_simple_camera(mut commands: Commands) {
 
 
 
-fn update_projectiles_system(mut commands: Commands, mut projectiles: Query<(Entity, &mut Projectile)>, time: Res<Time>) {
-    for (entity, mut projectile) in projectiles.iter_mut() {
-        projectile.duration.tick(time.delta());
-        if projectile.duration.finished() {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-fn projectile_on_removal_system(mut server: ResMut<RenetServer>, mut removed_projectiles: RemovedComponents<Projectile>) {
-    for entity in removed_projectiles.read() {
-        let message = ServerMessages::DespawnProjectile { entity };
-        let message = bincode::serialize(&message).unwrap();
-
-        server.broadcast_message(ServerChannel::ServerMessages, message);
-    }
-}
-
-
-
-
-#[allow(clippy::type_complexity)]
-fn server_network_sync_player_out(
-    mut server: ResMut<RenetServer>, 
-    players: Query<(&Player, &Transform)>,
-    mut query: Query<(Entity, &Transform), ( Or<(With<Player>, With<Projectile>, With<Monster>, With<NearestNeighbourComponent>)>)>,
-    treeaccess: Res<NNTree>
-  
-) {
-    for (player, transform) in players.iter() {
-
-        let mut networked_entities = NetworkedEntities::default();
-
-        for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
-            // info!("entity {:?}", entity);
-            if let Ok( (entity, mut transform)) = query.get_mut(entity.expect("No entity")) {
-
-                networked_entities.entities.push(entity);
-                networked_entities.translations.push(transform.translation.into());
-
-            }          
-           
-        }
-      
-        let sync_message = bincode::serialize(&networked_entities).unwrap();
-        // Send message to only one client
-        server.send_message(player.id, ServerChannel::NetworkedEntities, sync_message);
-        //*handle = colors.black.clone();
-
-    }
- 
-
-
-    /*let mut networked_entities = NetworkedEntities::default();
-    for (entity, transform) in query.iter() {
-        networked_entities.entities.push(entity);
-        networked_entities.translations.push(transform.translation.into());
-    }
-
-    let sync_message = bincode::serialize(&networked_entities).unwrap();
-    // Send message to only one client
-    server.send_message(client_id, ServerChannel::NetworkedEntities, sync_message);
-
-    
-    server.broadcast_message(ServerChannel::NetworkedEntities, sync_message);*/
-}
-
-fn read_translation_system(
-    transforms: Query<(Entity, &Transform), Changed<Transform>>,
-    time: Res<Time>,
-    fixed_time: Res<Time<Fixed>>
-) {
-    for (entity, transform) in transforms.iter() {
-       
-        println!(
-            "Entity {:?} moved to {:?} at {:?}, last_update {:?}, overstep {:?}",
-            entity, transform.translation, time.elapsed().as_millis(),  time.last_changed(), fixed_time.overstep_fraction()
-        );
-    }
-}
-fn read_translation_system2(
-    mut transforms: Query<(Entity, &mut KinematicCharacterControllerOutput, &Transform), Changed<Transform>>,
-    // mut transforms: Query<(Entity, &mut KinematicCharacterControllerOutput, &Transform)>,
-    time: Res<Time>) {
-    for (entity, mut controller,transform) in transforms.iter_mut() {
-        println!("is changed  {:?}, translation  {:?}, translation2  {:?}, servertime  {:?}",  controller.is_changed(), controller.effective_translation, transform.translation, time.elapsed().as_millis());
-    }
-}
-
-
-pub fn network_send_delta_rapier3d_position_system(
+#[cfg(feature = "absolute_interpolation")]
+pub fn network_send_absolute_position_system(
     mut server: ResMut<RenetServer>, 
     players: Query<(&Player, &LineOfSight)>,
-    mut entities: Query<(Entity, &mut KinematicCharacterControllerOutput, &Transform, &mut PrevState), Changed<KinematicCharacterControllerOutput>>,
+    mut entities: Query<(Entity, &Transform, &mut PrevState), Changed<Transform>>,
     time: Res<Time>,
+    fixed_time: Res<Time<Fixed>>,
 ) {
     for (player, line_of_sight) in players.iter() {
       
         for entity in line_of_sight.0.iter() {           
 
-            if let Ok( (entity, controller, transform, mut prev_state)) = entities.get_mut(*entity) {
+            if let Ok( (entity, transform, mut prev_state)) = entities.get_mut(*entity) {
                 
-                //let quantized_position = controller.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
-                //let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();  
-               // println!("is changed  {:?}, translation  {:?}, servertime  {:?}",  controller.is_changed(), controller.effective_translation, time.elapsed().as_millis());
-                
-               println!("translation {:?} ",transform.translation);   
-               if(controller.effective_translation != (transform.translation -  prev_state.translation)) {
-                    println!("NO CUADRA LA DIFERENCIA  {:?},  real {:?}", controller.effective_translation, (transform.translation -  prev_state.translation));   
-                }
-                else {
-                    println!("SI CUADRA LA DIFERENCIA  {:?},  real {:?}", controller.effective_translation, (transform.translation -  prev_state.translation));   
-                }
-                let mut delta_translation =  controller.effective_translation.div(TRANSLATION_PRECISION).as_ivec3();
-                
-                if(!controller.is_changed()) {
-                    continue;
-                }
-               
-                println!("translation {:?} . servertime  {:?}",delta_translation, time.elapsed().as_millis());   
+                let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
+
+                let delta_translation = quantized_position - prev_state.translation.div(TRANSLATION_PRECISION).as_ivec3();  
+                          
+                // println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
                 //delta_translation != IVec3::ZERO
                 if //&prev_state.rotation != rotation ||
-                 delta_translation.x != 0 
-                || delta_translation.z != 0 
-                || delta_translation.y.abs() > 7 // La gravedad hace que se mueva poquito y no queremos madnar 100000 de packets
+                    delta_translation.x != 0 
+                    || delta_translation.z != 0 
+                    || delta_translation.y.abs() > 7 // La gravedad hace que se mueva poquito y no queremos madnar 100000 de packets
                 {       
-                    //println!("translation Y {:?} . servertie  {:?}",delta_translation.y , time.elapsed().as_millis());   
-                    //if &prev_state.rotation != rotation || delta_translation != IVec3::ZERO  {                                  
-                    //println!("translation {:?} . servertie  {:?}",delta_translation, time.elapsed().as_millis());   
-                    let message= ServerMessages::MoveDelta {
+           
+                    let message= ServerMessages::MoveAbsolute {
                         entity,
-                        x: delta_translation.x,
-                        y: delta_translation.y,
-                        z: delta_translation.z,                      
+                        x: quantized_position.x,
+                        y: quantized_position.y,
+                        z: quantized_position.z,                      
                         server_time: time.elapsed().as_millis()
                     };
 
                     let sync_message = bincode::serialize(&message).unwrap();
                     // Send message to only one client
-
-                    //println!("Sent message to client_id {:?} .", player.id);   
+                    println!("Sent quantized_position {:?} .", quantized_position);   
                     server.send_message(player.id, ServerChannel::ServerMessages, sync_message);                    
        
                 }  
@@ -629,18 +547,18 @@ pub fn network_send_delta_rapier3d_position_system(
     }
     
     // posteriormente, se actualiza las ubicaciones antiguas de las entidades.
-    for (_entity, controller, transform, mut prev_state) in entities.iter_mut() {
+    for (_entity, transform, mut prev_state) in entities.iter_mut() {
         
-        //println!("Se actualiza prev state  {:?}",controller.translation);  
-        if(controller.is_changed()) {
-            prev_state.translation += controller.effective_translation;
-        } 
-      
+        //println!("Se actualiza prev state  {:?}",transform.translation);   
+        prev_state.translation = transform.translation;
         //prev_state.rotation = rotation.clone();
     }
 }
 
 
+ 
+
+#[cfg(not(feature = "absolute_interpolation"))]
 pub fn network_send_delta_position_system(
     mut server: ResMut<RenetServer>, 
     players: Query<(&Player, &LineOfSight)>,

@@ -7,8 +7,8 @@ use bevy::{
     prelude::*,
 };
 use bevy_asset_loader::prelude::*;
-
-use crate::{client_plugins::pointer::Target, AppState};
+use crate::{client_plugins::pointer::Target};
+use crate::shared::states::ClientState;
 
 
 #[derive(AssetCollection, Resource, Debug)]
@@ -54,13 +54,12 @@ impl Plugin for SpellAnimationsPlugin {
                 )
             )
             .add_loading_state(
-                LoadingState::new(AppState::Setup)
-                    .continue_to_state(AppState::InGame)
+                LoadingState::new(ClientState::Setup)
                     .load_collection::<SpellAssets>()
             )
             .add_systems(Update, (
                 setup_scene_once_loaded.before(animate_targets),
-                cast_spell.run_if(in_state(AppState::InGame)),
+                cast_spell.run_if(in_state(ClientState::InGame)),
                // remove_spell_shadows.before(animate_targets)
             ))
             .add_observer(on_cast_spell);     
@@ -352,9 +351,9 @@ impl Plugin for SpellAnimationsPlugin {
         
                 // If the top parent has an SpellId component then add the corresponding animation.
                 if let Ok(spell_id) = spells_query.get(top_entity) {
-                    info!("linking spell_id to {top_entity:?} for {entity:?}  for {spell_id:?}");
+                    //info!("linking spell_id to {top_entity:?} for {entity:?}  for {spell_id:?}");
 
-                    info!("animations  {animations:?}");
+                    //info!("animations  {animations:?}");
 
                     let mut transitions = AnimationTransitions::new();
 

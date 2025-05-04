@@ -1,11 +1,10 @@
 
 
 use bevy::prelude::*;
-use bevy_rapier3d::na::Scalar;
-use pathfinding::prelude::astar;
-use pathing::{get_astar_successors, get_path_between_translations, TargetPos};
-use crate::*;
-use avian3d::{parry::shape, prelude::*};
+use pathing::{get_path_between_translations, TargetPos};
+use crate::{shared::{channels::ServerChannel, components::*, messages::ServerMessages}, *};
+// use avian3d::{parry::shape, prelude::*};
+use shared::states::ServerState;
 
 #[derive(Event)]
 struct DamageTick {
@@ -31,11 +30,11 @@ impl Plugin for CombatPlugin {
         app                     
             .add_systems(
                 FixedUpdate, ( 
-                    network_change_attacking_state.run_if(in_state(AppState::InGame)),
-                    network_send_delta_health_system.run_if(in_state(AppState::InGame)),
+                    network_change_attacking_state.run_if(in_state(ServerState::InGame)),
+                    network_send_delta_health_system.run_if(in_state(ServerState::InGame)),
                     recalculate_path.before(crate::pathing::apply_rapier3d_velocity_system),
-                    aggro_rapier3d.run_if(in_state(AppState::InGame)).before(crate::pathing::apply_rapier3d_velocity_system),    
-                    attack.run_if(in_state(AppState::InGame)),
+                    aggro_rapier3d.run_if(in_state(ServerState::InGame)).before(crate::pathing::apply_rapier3d_velocity_system),    
+                    attack.run_if(in_state(ServerState::InGame)),
                 )
             )
             .add_observer(on_damage);
@@ -43,7 +42,7 @@ impl Plugin for CombatPlugin {
 
 
         fn aggro_rapier3d(
-            mut aggroed_entities: Query<(Entity, &Transform, &mut Aggro, Option<&mut Attacking>, Option<&mut Walking>), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
+            mut aggroed_entities: Query<(Entity, &Transform, &mut Aggro, Option<&mut Attacking>, Option<&mut Walking>), (Or<(With<Player>, With<NPC>, With<Monster>)>)>,
             //attacked_entities: Query<(Entity, &Transform), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
             mut commands: Commands,
             //spatial_query: SpatialQuery,
@@ -157,7 +156,7 @@ impl Plugin for CombatPlugin {
             for (entity,  attacking, mut attacking_timer) in attacking_entities.iter_mut() {    
                 // Los timers de atraque empiezan detenidos. 
                 // Se inicia cuando ya esta en rango y las validaciones son exitosas
-                if(attacking_timer.0.paused()) {
+                if attacking_timer.0.paused() {
                     info!("El timer está parado. No se ha empezado a atacar aún.");
                     let attack_speed = 0.5;
                     if(attacking.auto_attack == false) {
