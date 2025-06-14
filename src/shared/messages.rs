@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use bevy::prelude::*;
 use bevy_renet::renet::ClientId;
 use crate::shared::components::{Facing, MonsterKind, SpriteId};
+// use crate::shared::enums::DamageType;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientSyncMessages {
@@ -30,6 +31,7 @@ pub enum ServerSyncMessages {
         client_time: u128
     }
 }
+
 
 
 
@@ -78,10 +80,19 @@ pub enum ServerMessages {
         server_time: u128,
         //real_translation: [f32; 3],
     },
+    /*HealingTick {
+        entity: Entity,
+        healing: u32
+    },*/
+    DamageTick {
+        entity: Entity,
+        damage: u32,
+        damage_type: crate::server_plugins::combat::DamageType
+    },
     HealthChange {
         entity: Entity,
         max: u32,
-        current: u32
+        current: u32,
     },
     Attack {
         entity: Entity,

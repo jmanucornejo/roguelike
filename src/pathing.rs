@@ -58,8 +58,10 @@ impl Plugin for PathingPlugin {
             
         fn setup_gravity(mut rapier_config: Query<&mut RapierConfiguration>) {
 
-            let mut rapier_config = rapier_config.single_mut();
-            rapier_config.gravity = Vec3::new(0.0, -9.81, 0.0);      
+            if let Ok(mut rapier_config) = rapier_config.single_mut() {
+                rapier_config.gravity = Vec3::new(0.0, -9.81, 0.0);      
+            }
+          
             /*rapier_config.timestep_mode = TimestepMode::Fixed { 
                 dt: 1.0 / 240.0,
                 substeps: 1

@@ -13,29 +13,33 @@ opt-level = 1
 opt-level = 3
 
 [dependencies]
-avian3d = "0.1.2"
-bevy_contact_projective_decals = { git = "https://github.com/naasblod/bevy_contact_projective_decals.git", branch = "main" }
-bevy = { version = "0.15.0", features = ["dynamic_linking", "bevy_state"] }
-bevy-inspector-egui = "0.30"
-bevy_asset_loader = { version = "0.22.0", features = ["2d"] }
-bevy_atmosphere = "0.12.0"
-bevy_egui = "0.33.0"
-bevy_flycam = "0.15.0"
-bevy_health_bar3d = "3.4.0"
-bevy_obj = "0.15.0"
-bevy_panorbit_camera = "0.25"
-bevy_rapier3d = "0.29.0"
-bevy_renet = "1.0.0"
-bevy_spatial = "0.10.0"
-bevy_sprite3d = "4.0.0"
+avian3d = "0.3.0" # check
+# bevy_contact_projective_decals = { git = "https://github.com/naasblod/bevy_contact_projective_decals.git", branch = "main" } # should remove
+bevy = { version = "0.16.0", features = ["dynamic_linking", "bevy_state"] } # check
+bevy-inspector-egui = "0.31"  # check
+bevy_asset_loader = { version = "0.23.0", features = ["2d"] } # check
+bevy_atmosphere = "0.13.0" # check
+bevy_egui = "0.34.1" # check
+#bevy_flycam = "0.15.0" # missing
+bevy_flycam = { git = "https://github.com/sburris0/bevy_flycam.git", rev = "refs/pull/56/head" } # check
+bevy_health_bar3d = "3.5.0" # check
+bevy_obj = "0.16.0" # check
+bevy_panorbit_camera = "0.26" # check
+bevy_platform = "0.16.1"
+bevy_rapier3d = "0.30.0" # check
+# bevy_renet = "1.0.0" # parece q lo actualizaron a 0.16 https://github.com/lucaspoffo/renet/tree/master/bevy_renet
+bevy_renet = { git ="https://github.com/lucaspoffo/renet", rev ="refs/pull/177/head"}
+bevy_spatial = "0.11.0" # check
+bevy_sprite3d = "5.0.0" # check
 bincode = "1.3.3"
 fastrand = "2.1.0"
 local-ip-address = "0.6.1"
 pathfinding = "4.10.0"
 rand = "0.8.5"
-renet_visualizer = { version = "1.0.0", features = ["bevy"] }
+#renet_visualizer = { version = "1.0.0", features = ["bevy"] }
+renet_visualizer = { git ="https://github.com/lucaspoffo/renet", rev ="refs/pull/177/head",  features = ["bevy"]}
 serde = { version = "1.0.204", features = ["derive"] }
-smooth-bevy-cameras = "0.13.0"
+smooth-bevy-cameras = "0.14.0"  # check
 
 [features]
 default = ["absolute_interpolation"]

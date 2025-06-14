@@ -6,10 +6,17 @@ use crate::{shared::{channels::ServerChannel, components::*, messages::ServerMes
 // use avian3d::{parry::shape, prelude::*};
 use shared::states::ServerState;
 
+#[derive(Debug, Serialize, Deserialize)]
+pub enum DamageType {
+    Normal,
+    Critical,
+}
+
 #[derive(Event)]
-struct DamageTick {
-    entity: Entity,
-    damage: u32
+pub struct DamageTick {
+    pub entity: Entity,
+    pub damage: u32,
+    pub damage_type: DamageType
 }
 
 #[derive(Event)]
@@ -53,96 +60,98 @@ impl Plugin for CombatPlugin {
             map: Res<Map>,
         ) {
 
-            let rapier_context = read_rapier_context.single();
-
-            for (entity, attacker_transform,  aggroed, is_attacking, mut is_walking) in aggroed_entities.iter_mut() {                   
+            if let Ok(rapier_context) = read_rapier_context.single() {                
+          
+                for (entity, attacker_transform,  aggroed, is_attacking, mut is_walking) in aggroed_entities.iter_mut() {                   
+                    
+                    let attack_range:f32 = 1.;
+                    // If in range, attack.         
+                    if(is_in_attack_range(attack_range, attacker_transform.translation, aggroed.enemy_translation) 
+                    && is_in_view_rapier3d(&rapier_context, attacker_transform.translation, aggroed.enemy_translation, aggroed.enemy, &map_query)
+                    // && is_attacking.is_none()
+                    ) {
+                        
                 
-                let attack_range:f32 = 1.;
-                // If in range, attack.         
-                if(is_in_attack_range(attack_range, attacker_transform.translation, aggroed.enemy_translation) 
-                && is_in_view_rapier3d(&rapier_context, attacker_transform.translation, aggroed.enemy_translation, aggroed.enemy, &map_query)
-                // && is_attacking.is_none()
-                ) {
-                    
-             
-              
-                    if is_attacking.is_some() {
-                        info!("walking? {:?}", is_walking);  
-                        continue;
-                    }
-                    info!("ATACARRRRRRRRRRRR");  
-                    // STOP WALKING. ALREADY NEAR TARGET.
-                    is_walking = None;
-                            
-                    let mut timer = Timer::from_seconds(1.0, TimerMode::Once);
-                    timer.pause(); // Timer pausado hasta que este en rango de ataque;         
-
-                    /*commands.trigger(AttackAnimation { 
-                        entity: entity,
-                        enemy: aggroed.enemy,
-                        attack_speed: 0.5,
-                        auto_attack: aggroed.auto_attack
-                    });   */   
-
-                    commands.entity(entity)
-                    .insert(AttackingTimer(timer))
-                    .insert(Attacking {
-                        enemy: aggroed.enemy,
-                        auto_attack: aggroed.auto_attack,
-                        //enemy_translation: aggroed.enemy_translation,
-                       // timer: timer                                
-                    }).remove::<Walking>().remove::<TargetPos>();              
-                    
-                    continue;
-
-                }   
-            
-                if let Some(walking) = is_walking {
-
-                    if(walking.target_translation == aggroed.enemy_translation) {
-                        //info!("Already walking. {:?}", walking);  
-                        continue;
-                    }
-                  
-                }
-                       
-                   
-                info!("No esta en attack range ni puede ver al enemigo. No está caminando. Se cambia a caminando.");
-                let path =  get_path_between_translations(attacker_transform.translation, aggroed.enemy_translation, &map);
-                info!("Se calcula camino nuevo hacia el enemigo que está en {:?} {:?}",  aggroed.enemy_translation, path);
-                           
-                commands.entity(entity).insert(Walking {
-                    target_translation: aggroed.enemy_translation,
-                    path: path,                               
-                })
-                .remove::<Attacking>()
-                .remove::<AttackingTimer>();
-            
-              
-             
-                // Si hay camino, se intenta acercar.
-                /*if let Some((steps_vec, steps_left)) = aggroed.path.clone() {
-
-                    let current_cell_index: Option<usize>  =  steps_vec.iter().position(|&r| r ==  Pos(
-                        attacker_transform.translation.x.round() as i32, 
-                        attacker_transform.translation.z.round() as i32
-                    ));
-                    
-                    if let Some(current_index) = current_cell_index {                                         
-
-                        if let Some(final_pos) = steps_vec.get(current_index+1) {
-                            //info!("5. Final Pos: {:?}!", final_pos);    
-                            // Se cambia el punto objetivo.
-                            commands.entity(entity).insert(TargetPos {
-                                position: Vec3 { x: final_pos.0 as f32, y: 2.0, z: final_pos.1 as f32},
-                            });         
+                
+                        if is_attacking.is_some() {
+                            info!("walking? {:?}", is_walking);  
+                            continue;
                         }
-            
-                        //}
+                        info!("ATACARRRRRRRRRRRR");  
+                        // STOP WALKING. ALREADY NEAR TARGET.
+                        is_walking = None;
+                                
+                        let mut timer = Timer::from_seconds(1.0, TimerMode::Once);
+                        timer.pause(); // Timer pausado hasta que este en rango de ataque;         
 
-                    }      
-                }    */               
+                        /*commands.trigger(AttackAnimation { 
+                            entity: entity,
+                            enemy: aggroed.enemy,
+                            attack_speed: 0.5,
+                            auto_attack: aggroed.auto_attack
+                        });   */   
+
+                        commands.entity(entity)
+                        .insert(AttackingTimer(timer))
+                        .insert(Attacking {
+                            enemy: aggroed.enemy,
+                            auto_attack: aggroed.auto_attack,
+                            //enemy_translation: aggroed.enemy_translation,
+                        // timer: timer                                
+                        }).remove::<Walking>().remove::<TargetPos>();              
+                        
+                        continue;
+
+                    }   
+                
+                    if let Some(walking) = is_walking {
+
+                        if(walking.target_translation == aggroed.enemy_translation) {
+                            //info!("Already walking. {:?}", walking);  
+                            continue;
+                        }
+                    
+                    }
+                        
+                    
+                    info!("No esta en attack range ni puede ver al enemigo. No está caminando. Se cambia a caminando.");
+                    let path =  get_path_between_translations(attacker_transform.translation, aggroed.enemy_translation, &map);
+                    info!("Se calcula camino nuevo hacia el enemigo que está en {:?} {:?}",  aggroed.enemy_translation, path);
+                            
+                    commands.entity(entity).insert(Walking {
+                        target_translation: aggroed.enemy_translation,
+                        path: path,                               
+                    })
+                    .remove::<Attacking>()
+                    .remove::<AttackingTimer>();
+                
+                
+                
+                    // Si hay camino, se intenta acercar.
+                    /*if let Some((steps_vec, steps_left)) = aggroed.path.clone() {
+
+                        let current_cell_index: Option<usize>  =  steps_vec.iter().position(|&r| r ==  Pos(
+                            attacker_transform.translation.x.round() as i32, 
+                            attacker_transform.translation.z.round() as i32
+                        ));
+                        
+                        if let Some(current_index) = current_cell_index {                                         
+
+                            if let Some(final_pos) = steps_vec.get(current_index+1) {
+                                //info!("5. Final Pos: {:?}!", final_pos);    
+                                // Se cambia el punto objetivo.
+                                commands.entity(entity).insert(TargetPos {
+                                    position: Vec3 { x: final_pos.0 as f32, y: 2.0, z: final_pos.1 as f32},
+                                });         
+                            }
+                
+                            //}
+
+                        }      
+                    }    */               
+                }
             }
+
         }
 
 
@@ -179,7 +188,8 @@ impl Plugin for CombatPlugin {
                 info!("Finalizó el timer. Timer: {:?}", attacking_timer.0);
                 commands.trigger(DamageTick { 
                     entity: attacking.enemy,
-                    damage: 5
+                    damage: 5,
+                    damage_type: DamageType::Normal
                 });      
 
                 if(attacking.auto_attack == false) {

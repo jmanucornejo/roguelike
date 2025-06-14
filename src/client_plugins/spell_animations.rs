@@ -72,7 +72,7 @@ impl Plugin for SpellAnimationsPlugin {
             mut graphs: ResMut<Assets<AnimationGraph>>,
         ) {   
 
-            let mut spell_animations = HashMap::new();
+            let mut spell_animations: HashMap<SpellId, SpellAnimation> = HashMap::new();
             //let mut spell_animations: Vec<SpellAnimation> = vec![];
 
             let mut graph = AnimationGraph::new();
@@ -304,14 +304,15 @@ impl Plugin for SpellAnimationsPlugin {
 
             if mouse_button_input.just_pressed(MouseButton::Right) {
                   // println!("graphs {} ", graphs);
-                  let target_transform = target_query.single();
-                   println!("target_transform {:?} ", target_transform);
+                 if let Ok(target_transform) = target_query.single() {
+                    
+                    println!("target_transform {:?} ", target_transform);
 
-                commands.trigger(CastSpell { 
-                    spell_id: 2,                    
-                    translation: target_transform.translation 
-                });       
-          
+                    commands.trigger(CastSpell { 
+                        spell_id: 2,                    
+                        translation: target_transform.translation 
+                    });       
+                }
             }                  
         }
 
@@ -341,7 +342,7 @@ impl Plugin for SpellAnimationsPlugin {
             mut commands: Commands,
             animations: Res<SpellAnimations>,
            // animation: Res<SpellAnimation>,
-            parents_query: Query<&Parent>,
+            parents_query: Query<&ChildOf>,
             spells_query: Query<&SpellId>,
             mut animation_players_query: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
         ) {
@@ -441,7 +442,7 @@ impl Plugin for SpellAnimationsPlugin {
         }
 
 
-        fn get_top_parent(mut curr_entity: Entity, parent_query: &Query<&Parent>) -> Entity {
+        fn get_top_parent(mut curr_entity: Entity, parent_query: &Query<&ChildOf>) -> Entity {
             //Loop up all the way to the top parent
             loop {
                 if let Ok(parent) = parent_query.get(curr_entity) {

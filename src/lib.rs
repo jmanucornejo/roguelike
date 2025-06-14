@@ -6,7 +6,8 @@ pub mod shared;
 
 // use avian3d::{parry::shape, prelude::*};
 use bevy_spatial::{kdtree::KDTree3};
-use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}, utils::HashMap};
+use bevy::{prelude::*, render::render_resource::{AsBindGroup, ShaderRef}};
+use bevy_platform::collections::hash_map::HashMap;
 use bevy_renet::renet::*;
 use serde::{Deserialize, Serialize};
 use shared::components::*;
@@ -14,7 +15,7 @@ use std::{f32::consts::PI, time::Duration};
 use bevy::render::render_resource::{ShaderStages, ShaderType};
 use bevy::reflect::TypePath;
 
-use bevy_rapier3d::{prelude::*};
+use bevy_rapier3d::prelude::*;
 
 
 
@@ -72,14 +73,10 @@ pub type NNTree = KDTree3<NearestNeighbourComponent>;
 pub struct AttackSpeed(pub f32);
 
 
-
-
 #[derive(Component, Debug)]
 pub struct MapEntity; 
 
 
-#[derive(Component)]
-pub struct MonsterParent; 
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct NetworkedEntities {
@@ -384,7 +381,20 @@ pub fn setup_level(
     );*/
 
     // light
-    commands.spawn(DirectionalLightBundle {
+    commands.spawn((
+         DirectionalLight {
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform {
+            translation:  Vec3::new(0.0, 2.0, 0.0),
+             rotation: Quat::from_rotation_x(-PI / 4.),
+            //rotation,
+            ..Default::default()
+        }
+    ));
+
+    /*commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             shadows_enabled: true,
             ..default()
@@ -395,7 +405,7 @@ pub fn setup_level(
             ..default()
         },
         ..default()
-    });
+    });*/
 
 
 }

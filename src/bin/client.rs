@@ -5,6 +5,7 @@ use bevy::pbr::NotShadowReceiver;
 // use avian3d::math::Scalar;
 // use avian3d::prelude::*;
 use bevy_atmosphere::prelude::*;
+use bevy_egui::EguiPlugin;
 use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
@@ -179,6 +180,7 @@ fn main() {
                 .load_collection::<SkyboxAssets>()
                 .continue_to_state(ClientState::InMenu)
         )
+        .add_plugins(EguiPlugin { enable_multipass_for_primary_context: true })
         .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
         )
@@ -476,7 +478,7 @@ fn client_sync_players(
 
                     // a veces el mensaje de desconexión llega para un cliente que aun no spawneaba a esa entidad
                     // y crasheaba.
-                    if let Some(_entity_exists) = commands.get_entity(client_entity) {
+                    if let Ok(_entity_exists) = commands.get_entity(client_entity) {
                         commands.entity(client_entity).despawn();
                         network_mapping.0.remove(&server_entity);
                     }
@@ -674,6 +676,18 @@ fn client_sync_players(
                     }
                 }            
             },
+            ServerMessages::DamageTick { entity, damage, damage_type} => {
+                // println!("Cambio el HP {}, {} ", max, current);
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+
+                    commands.trigger(server_plugins::combat::DamageTick { 
+                        entity: *client_entity,                    
+                        damage: damage,
+                        damage_type: damage_type
+                    });      
+
+                }
+            },
             ServerMessages::HealthChange { entity, max, current} => {
                 // println!("Cambio el HP {}, {} ", max, current);
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
@@ -704,7 +718,7 @@ fn billboard(
 ) {
 
  
-    if let Ok((mut camera_transform, pan_cam)) = camera_query.get_single_mut() {
+    if let Ok((mut camera_transform, pan_cam)) = camera_query.single_mut() {
  
          for (mut entity_transform) in entities_query.iter_mut() {     
           
@@ -848,8 +862,8 @@ fn camera_follow(
         &mut PanOrbitCamera),  (With<Camera>, Without<ControlledPlayer>)>,
     player_query: Query<&Transform, (With<ControlledPlayer>, Changed<Transform>)>
 ) {
-    let (mut pan_cam) = camera_query.single_mut();
-    if let Ok(player_transform) = player_query.get_single() {
+    
+    if let (Ok(player_transform), Ok(mut pan_cam)) = (player_query.single(), camera_query.single_mut()) {
      
         //cam.look = Transform::from_xyz(0., 8.0, 2.5).looking_at(player_transform.translation.into(), Vec3::Y);
          pan_cam.target_focus  = player_transform.translation.into();
@@ -861,18 +875,6 @@ fn camera_follow(
 }
 
 
-fn camera_with_parent(
-    q_child: Query<(&Parent, &Transform), With<Camera>>,
-    q_parent: Query<&GlobalTransform>,
-) {
-    for (parent, child_transform) in q_child.iter() {
-        // `parent` contains the Entity ID we can use
-        // to query components from the parent:
-        let parent_global_transform = q_parent.get(parent.get());
-
-        // do something with the components
-    }
-}
 
 
 fn set_camera_facing(
@@ -880,7 +882,7 @@ fn set_camera_facing(
     mut camera_facing: ResMut<CameraFacing>
 ) {
  
-    if let Ok((mut camera_transform, pan_cam)) = camera_query.get_single_mut() {
+    if let Ok((mut camera_transform, pan_cam)) = camera_query.single_mut() {
         if let Some(yaw) = pan_cam.yaw {
           
             let mut rotation = ((8.0 * (yaw.to_degrees()) / 360.0).round() % 8.0) as i32;
@@ -958,7 +960,7 @@ fn set_entities_facing(
 fn sprite_movement(
     time: Res<Time>,
     mut q_parent: Query<(&mut AnimationTimer, &mut Facing, &GameVelocity, &mut Animation)>,
-    mut q_child: Query<(&Parent, &mut Sprite3d)>,
+    mut q_child: Query<(&ChildOf, &mut Sprite3d)>,
     camera_rotation: Res<CameraFacing>
 ) {    
 

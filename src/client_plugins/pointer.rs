@@ -1,15 +1,13 @@
 use avian3d::math::Scalar;
-use bevy::{pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, window::PrimaryWindow};
+use bevy::{pbr::{decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt}, NotShadowCaster, NotShadowReceiver}, prelude::*, window::PrimaryWindow};
 use bevy_asset_loader::prelude::*;
 use bevy_panorbit_camera::PanOrbitCamera;
 use client_plugins::shared::*;
-//use bevy_contact_projective_decals::{decal_mesh_quad, DecalBundle, DecalMaterial, DecalPlugin};
 use bevy::pbr::ExtendedMaterial;
 use crate::*;
 use shared::components::*;
 use shared::messages::*;
 use shared::states::ClientState;
-//use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
 
 // use avian3d::{parry::shape, prelude::*};
 
@@ -75,7 +73,7 @@ impl Plugin for PointerPlugin {
             mut commands: Commands,
             mut meshes: ResMut<Assets<Mesh>>,
             mut materials: ResMut<Assets<StandardMaterial>>,
-            //mut decal_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, DecalMaterial>>>,
+            mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
             asset_server: Res<AssetServer>,
         ) {
             commands.spawn((
@@ -97,6 +95,19 @@ impl Plugin for PointerPlugin {
                     
                     ..default()
                 }*/
+                ForwardDecal,
+                MeshMaterial3d(decal_standard_materials.add(ForwardDecalMaterial {
+                    base: StandardMaterial {
+                        base_color_texture: Some(asset_server.load("grid_whitespace_big.png")),
+                        alpha_mode: AlphaMode::Blend,
+                        ..default()
+                    },
+                    extension: ForwardDecalMaterialExt {
+                        depth_fade_factor: 0.0,
+                    },
+                    //mesh: meshes.add(decal_mesh_quad(Vec3::Y)),
+                })),
+                Transform::from_scale(Vec3::splat(11.0)),
                 Transform::from_xyz(0.0, 1., 0.0),
                 Target,
                 NotShadowCaster,
@@ -146,54 +157,61 @@ impl Plugin for PointerPlugin {
         }
 
         fn shape_cast(
-            primary_window: Query<&Window, With<PrimaryWindow>>,
+            primary_window_query: Query<&Window, With<PrimaryWindow>>,
             //rapier_context: Res<RapierContext>,
             read_rapier_context: ReadRapierContext,          
             camera_query: Query<(&Camera, &GlobalTransform)>,
         ) {
-            let (camera,camera_transform) = camera_query.single();
-            let rapier_context = read_rapier_context.single();
 
-            if let Some(cursor_pos) = primary_window.single().cursor_position() {      
+            if let (
+                Ok((camera, camera_transform)), 
+                Ok(rapier_context), 
+                Ok(primary_window))
+                = (camera_query.single(), read_rapier_context.single(), primary_window_query.single()) {
 
-                if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+   
+                if let Some(cursor_pos) = primary_window.cursor_position() {      
 
-                    let cam_transform = camera_transform.compute_transform();
-                    let direction: Dir3 = ray.direction;
+                    if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
 
-                    let shape = Collider::cuboid(1.0, 2.0, 1.0);
-                    let shape_pos = cam_transform.translation;
-                    let shape_rot = Quat::from_rotation_z(0.8);
-                    let shape_vel = Vec3::new(0.0, 0.4, 0.0);
-                    let filter = QueryFilter::default();
-                    let options = ShapeCastOptions {
-                        max_time_of_impact: 150.0,
-                        target_distance: 0.0,
-                        stop_at_penetration: false,
-                        compute_impact_geometry_on_penetration: true,
-                    };
-                    
-    
-                    let origin = Vec3::new(cursor_pos.x, 100.0, cursor_pos.y);
-                    //let direction = Vec3::new(0.0, -1.0, 0.0).normalize(); // Move along the X-axis
-                    let max_distance = 150.0; // Maximum travel distance
+                        let cam_transform = camera_transform.compute_transform();
+                        let direction: Dir3 = ray.direction;
 
-                    if let Some((entity, hit)) =
-                        rapier_context.cast_shape(shape_pos,  Quat::IDENTITY, direction.normalize(), &shape, options, filter)
-                    {
-                        // The first collider hit has the entity `entity`. The `hit` is a
-                        // structure containing details about the hit configuration.
-                        /*println!(
-                            "Hit the entity {:?} with the configuration: {:?}",
-                            entity, hit
-                        );*/
+                        let shape = Collider::cuboid(1.0, 2.0, 1.0);
+                        let shape_pos = cam_transform.translation;
+                        let shape_rot = Quat::from_rotation_z(0.8);
+                        let shape_vel = Vec3::new(0.0, 0.4, 0.0);
+                        let filter = QueryFilter::default();
+                        let options = ShapeCastOptions {
+                            max_time_of_impact: 150.0,
+                            target_distance: 0.0,
+                            stop_at_penetration: false,
+                            compute_impact_geometry_on_penetration: true,
+                        };
+                        
+        
+                        let origin = Vec3::new(cursor_pos.x, 100.0, cursor_pos.y);
+                        //let direction = Vec3::new(0.0, -1.0, 0.0).normalize(); // Move along the X-axis
+                        let max_distance = 150.0; // Maximum travel distance
+
+                        if let Some((entity, hit)) =
+                            rapier_context.cast_shape(shape_pos,  Quat::IDENTITY, direction.normalize(), &shape, options, filter)
+                        {
+                            // The first collider hit has the entity `entity`. The `hit` is a
+                            // structure containing details about the hit configuration.
+                            /*println!(
+                                "Hit the entity {:?} with the configuration: {:?}",
+                                entity, hit
+                            );*/
+                        }
                     }
                 }
             }
 
         }
+
         fn update_cursor_system_rapier3d(
-            primary_window: Query<&Window, With<PrimaryWindow>>,
+            primary_window_query: Query<&Window, With<PrimaryWindow>>,
             mut target_query: Query<&mut Transform, With<Target>>,
             camera_query: Query<(&Camera,  &GlobalTransform)>,
             read_rapier_context: ReadRapierContext,          
@@ -201,104 +219,111 @@ impl Plugin for PointerPlugin {
             interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
             mut cursor: Query<&mut GameCursor>,
         ) {
-            let (camera, camera_transform) = camera_query.single();
+          
+            if let (
+                Ok((camera, camera_transform)), 
+                Ok(rapier_context), 
+                Ok(mut target_transform),
+                Ok(primary_window))
+                = (camera_query.single(), read_rapier_context.single(), target_query.single_mut(), primary_window_query.single()) {
 
-            let rapier_context = read_rapier_context.single();
-            
-            let mut target_transform = target_query.single_mut();
-            if let Some(cursor_pos) = primary_window.single().cursor_position() {
+                if let Some(cursor_pos) = primary_window.cursor_position() {
+                        
+                    if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
 
-      
-                if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+                        let cam_transform = camera_transform.compute_transform();
+                        let direction: Dir3 = ray.direction;
 
-                    let cam_transform = camera_transform.compute_transform();
-                    let direction: Dir3 = ray.direction;
+                        if let Some((entity, time_of_impact)) = rapier_context.cast_ray(cam_transform.translation, direction.normalize(), bevy_rapier3d::prelude::Real::MAX, true, QueryFilter::default()) {
+                            // The first collider hit has the entity `entity` and it hit after
+                            // the ray travelled a distance equal to `ray_dir * time_of_impact`.
+                            let hit_point = cam_transform.translation + direction.normalize() * time_of_impact;
+                            // println!("Entity {:?} hit at point {}", entity, hit_point);
 
-                    if let Some((entity, time_of_impact)) = rapier_context.cast_ray(cam_transform.translation, direction.normalize(), bevy_rapier3d::prelude::Real::MAX, true, QueryFilter::default()) {
-                        // The first collider hit has the entity `entity` and it hit after
-                        // the ray travelled a distance equal to `ray_dir * time_of_impact`.
-                        let hit_point = cam_transform.translation + direction.normalize() * time_of_impact;
-                        // println!("Entity {:?} hit at point {}", entity, hit_point);
+                            let shape = Collider::cuboid(1.0, 2.0, 1.0);
+                            let origin = Vec3::new(hit_point.x, -10.0, hit_point.z);
+                            let direction = Vec3::new(0.0, 1.0, 0.0).normalize(); // Move along the Y-axis upwards
+                            let filter = QueryFilter::default();
+                            let options = ShapeCastOptions {
+                                max_time_of_impact: 150.0,
+                                target_distance: 0.0,
+                                stop_at_penetration: true,
+                                compute_impact_geometry_on_penetration: false,
+                            };
+                            if let Some((entity, hit)) =
+                            rapier_context.cast_shape(origin,  Quat::IDENTITY, direction.normalize(), &shape, options, filter)
+                            {
+                                // The first collider hit has the entity `entity`. The `hit` is a
+                                // structure containing details about the hit configuration.
+                            
 
-                        let shape = Collider::cuboid(1.0, 2.0, 1.0);
-                        let origin = Vec3::new(hit_point.x, -10.0, hit_point.z);
-                        let direction = Vec3::new(0.0, 1.0, 0.0).normalize(); // Move along the Y-axis upwards
-                        let filter = QueryFilter::default();
-                        let options = ShapeCastOptions {
-                            max_time_of_impact: 150.0,
-                            target_distance: 0.0,
-                            stop_at_penetration: true,
-                            compute_impact_geometry_on_penetration: false,
-                        };
-                        if let Some((entity, hit)) =
-                        rapier_context.cast_shape(origin,  Quat::IDENTITY, direction.normalize(), &shape, options, filter)
-                        {
-                            // The first collider hit has the entity `entity`. The `hit` is a
-                            // structure containing details about the hit configuration.
-                           
+                                if let Some( details) = hit.details {
+                                    let mut translation = ray.origin + *ray.direction * time_of_impact;
+                                    translation.x = translation.x.round();
+                                    translation.z = translation.z.round();
+                                    //translation.y =  translation.y + 0.15; 
+                                    translation.y = details.witness1.y.round();
+                                    target_transform.translation = translation;
 
-                            if let Some( details) = hit.details {
-                                let mut translation = ray.origin + *ray.direction * time_of_impact;
-                                translation.x = translation.x.round();
-                                translation.z = translation.z.round();
-                                //translation.y =  translation.y + 0.15; 
-                                translation.y = details.witness1.y.round();
-                                target_transform.translation = translation;
-
+                                    /*println!(
+                                        "target_transform.translation: {:?}",
+                                        translation
+                                    );*/
+                                }
+                                
                                 /*println!(
-                                    "target_transform.translation: {:?}",
-                                    translation
+                                    "Hit the entity {:?} with the configuration: {:?}",
+                                    entity, hit
                                 );*/
+                    
+
                             }
+
                             
-                            /*println!(
-                                "Hit the entity {:?} with the configuration: {:?}",
-                                entity, hit
-                            );*/
-                  
+                            if let Ok(mut game_cursor) = cursor.single_mut() {
 
-                        }
-
-                        let mut game_cursor: Mut<'_, GameCursor> = cursor.single_mut();
-                      
-                        if let Ok((interactive_entity)) = interactive_entities.get(entity) {                            
-                      
-                            if(Some(interactive_entity) != game_cursor.hovered_entity) {
-                                game_cursor.hovered_entity = Some(interactive_entity);
-                            }                          
+                                if let Ok((interactive_entity)) = interactive_entities.get(entity) {                            
+                            
+                                    if(Some(interactive_entity) != game_cursor.hovered_entity) {
+                                        game_cursor.hovered_entity = Some(interactive_entity);
+                                    }                          
+                                
+                                    if(game_cursor.action != CursorKind::Attack) {
+                                        game_cursor.action = CursorKind::Attack;
+                                    }                           
+                                }
+                                else {
+                                // println!("No le dimos a nada.Frist hit {:?}", first_hit.entity);
+                                    if(game_cursor.hovered_entity != None) {
+                                        game_cursor.hovered_entity = None;
+                                    }
+                                    
+                                    if(game_cursor.action != CursorKind::Default) {
+                                        game_cursor.action = CursorKind::Default;
+                                    }
+                                }
+                            }
+                        
                            
-                            if(game_cursor.action != CursorKind::Attack) {
-                                game_cursor.action = CursorKind::Attack;
-                            }                           
-                        }
-                        else {
-                           // println!("No le dimos a nada.Frist hit {:?}", first_hit.entity);
-                            if(game_cursor.hovered_entity != None) {
-                                game_cursor.hovered_entity = None;
-                            }
-                            
-                            if(game_cursor.action != CursorKind::Default) {
-                                game_cursor.action = CursorKind::Default;
-                            }
-                        }
-                      
-                        //println!("First hit: {:?}", first_hit);
-                        /*println!(
-                            "Hit entity {:?} at {} with normal {}",
-                            first_hit.entity,
-                            ray.origin + *ray.direction * first_hit.time_of_impact,
-                            first_hit.normal,
-                        );*/
+                        
+                            //println!("First hit: {:?}", first_hit);
+                            /*println!(
+                                "Hit entity {:?} at {} with normal {}",
+                                first_hit.entity,
+                                ray.origin + *ray.direction * first_hit.time_of_impact,
+                                first_hit.normal,
+                            );*/
 
-                        /*let mut translation = ray.origin + *ray.direction * time_of_impact;
-                        translation.x = translation.x.round();
-                        translation.z = translation.z.round();
-                        //translation.y =  translation.y + 0.15; 
-                        translation.y = translation.y ;
-                        target_transform.translation = translation;*/
-                    }                   
-                
-                   
+                            /*let mut translation = ray.origin + *ray.direction * time_of_impact;
+                            translation.x = translation.x.round();
+                            translation.z = translation.z.round();
+                            //translation.y =  translation.y + 0.15; 
+                            translation.y = translation.y ;
+                            target_transform.translation = translation;*/
+                        }                   
+                    
+                    
+                    }
                 }
             }
         }
@@ -408,9 +433,9 @@ impl Plugin for PointerPlugin {
             mut cursors: Query<(&GameCursor, &mut ImageNode), (With<GameCursor>,Changed<GameCursor>)>,
             asset_server: Res<AssetServer>,
         ) {
-            //let game_cursor = cursor.get_single_mut();
+            //let game_cursor = cursor.single_mut();
 
-            if let Ok((cursor, mut img)) =  cursors.get_single_mut() {                
+            if let Ok((cursor, mut img)) =  cursors.single_mut() {                
                 match cursor.action {
                     CursorKind::Default => img.image = asset_server.load("cursors/PNG/01.png").into(),
                     CursorKind::Attack => img.image = asset_server.load("cursors/PNG/05.png").into(),
@@ -430,51 +455,54 @@ impl Plugin for PointerPlugin {
             mut commands: Commands,
             asset_server: Res<AssetServer>,
         ) {
-            let mut window: Mut<Window> = windows.single_mut();
-            window.cursor_options.visible = false;
-            let cursor_spawn: Vec3 = Vec3::ZERO;
+            if let Ok(mut window) = windows.single_mut() {
+                window.cursor_options.visible = false;
+                let cursor_spawn: Vec3 = Vec3::ZERO;
 
-            commands.spawn((
-                ImageNode {
-                    image: asset_server.load("cursors/PNG/01.png").into(),
-                    ..default()
-                },
-                Node {
-                    height: Val::Px(32.),
-                    width: Val::Px(32.),
-                    position_type: PositionType::Absolute,
-                    
-                    ..default()
-                },
-                /*ImageBundle {
-                    image: asset_server.load("cursors/PNG/01.png").into(),
-                    style: Style {
-                        //display: Display::None,
+                commands.spawn((
+                    ImageNode {
+                        image: asset_server.load("cursors/PNG/01.png").into(),
+                        ..default()
+                    },
+                    Node {
                         height: Val::Px(32.),
                         width: Val::Px(32.),
                         position_type: PositionType::Absolute,
-                        //position: UiRect::all(Val::Auto),
+                        
                         ..default()
                     },
-                    z_index: ZIndex::Global(15),
-                    transform: Transform::from_translation(cursor_spawn),
-                    ..default()
-                },*/
-                GameCursor {
-                    action: CursorKind::Default,
-                    hovered_entity: None
-                }
-            ));
+                    /*ImageBundle {
+                        image: asset_server.load("cursors/PNG/01.png").into(),
+                        style: Style {
+                            //display: Display::None,
+                            height: Val::Px(32.),
+                            width: Val::Px(32.),
+                            position_type: PositionType::Absolute,
+                            //position: UiRect::all(Val::Auto),
+                            ..default()
+                        },
+                        z_index: ZIndex::Global(15),
+                        transform: Transform::from_translation(cursor_spawn),
+                        ..default()
+                    },*/
+                    GameCursor {
+                        action: CursorKind::Default,
+                        hovered_entity: None
+                    }
+                ));
+            }
+            
         }
 
         fn move_cursor(
             primary_window: Query<&Window, With<PrimaryWindow>>,
             mut cursor: Query<&mut Node, With<GameCursor>>) {
 
-            if let Some(position) = primary_window.single().cursor_position() {
-                let mut img_style = cursor.single_mut();
-                img_style.left = Val::Px(position.x);
-                img_style.top = Val::Px(position.y);
+            if let (Ok(window), Ok(mut cursor)) = (primary_window.single(), cursor.single_mut()) {
+                if let Some(position) = window.cursor_position() {          
+                    cursor.left = Val::Px(position.x);
+                    cursor.top = Val::Px(position.y);
+                }              
             }
         }
 
@@ -499,29 +527,27 @@ impl Plugin for PointerPlugin {
 
             if mouse_button_input.just_pressed(MouseButton::Left) {
 
-                if let Ok((cursor)) =  cursors.get_single_mut() {
+                if let Ok((cursor)) =  cursors.single_mut() {
                   
                     match cursor.action {
                         CursorKind::Default => {
 
-                            let target_transform = target_query.single();
-
-                            let mut move_translation = target_transform.translation;
-                            move_translation.x = move_translation.x.round();
-                            move_translation.z = move_translation.z.round();
-            
-                            player_input.destination_at = Some(Pos(move_translation.x as i32, move_translation.z as i32));
-            
-                            if let Ok(player_entity) = &player_entities.get_single() {
+                            if let (Ok(target_transform),Ok(player_entity))  = (target_query.single(), &player_entities.single()) {
+                                let mut move_translation = target_transform.translation;
+                                move_translation.x = move_translation.x.round();
+                                move_translation.z = move_translation.z.round();
+                
+                                player_input.destination_at = Some(Pos(move_translation.x as i32, move_translation.z as i32));
+                
+                            
                                 info!("Hay un player entity: {:?}!", player_entity );
-                                commands.entity(*player_entity).insert(PlayerCommand::Move {
+                                /*commands.entity(*player_entity).insert(PlayerCommand::Move {
+                                    destination_at: move_translation,
+                                });*/
+                                player_commands.write(PlayerCommand::Move {
                                     destination_at: move_translation,
                                 });
-                            }      
-            
-                            player_commands.send(PlayerCommand::Move {
-                                destination_at: move_translation,
-                            });
+                            }       
                         },
                         CursorKind::Attack => {
                             info!("Attack: {:?}!", cursor.hovered_entity );
@@ -533,25 +559,19 @@ impl Plugin for PointerPlugin {
 
                                 info!("server entity: {:?}!", server_entity );
                                 if let Some((server_entity)) = server_entity {
-
-                                    player_commands.send(PlayerCommand::BasicAttack {
+                                    player_commands.write(PlayerCommand::BasicAttack {
                                         entity: *server_entity,
-                                    });
-                                  
-
-                                }
-
-                               
-                            
-                            }                         
-                          
+                                    });   
+                                }  
+                            }  
                         },
                         CursorKind::Cast => {
-                            let target_transform = target_query.single();
-
-                            player_commands.send(PlayerCommand::Cast {
-                                cast_at: target_transform.translation,
-                            });
+                            if let Ok(target_transform) = target_query.single(){
+                                player_commands.write(PlayerCommand::Cast {
+                                    cast_at: target_transform.translation,
+                                });
+                            }
+                           
                         },     
                     }
                 }

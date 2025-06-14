@@ -49,6 +49,7 @@ use shared::constants::*;
 use shared::messages::*;
 use shared::states::ServerState;
 
+
 #[derive(Debug, Default, Resource)]
 pub struct ServerLobby {
     pub players: HashMap<ClientId, Entity>,
@@ -63,7 +64,7 @@ fn main() {
             level: bevy::log::Level::DEBUG,
             ..Default::default()
         }))
-        //.add_plugins(EguiPlugin)
+        .add_plugins(EguiPlugin { enable_multipass_for_primary_context: true })
         .add_plugins(  
             WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)),
         )
@@ -491,12 +492,11 @@ fn server_events(
 
 pub fn setup_simple_camera(mut commands: Commands) {
     // camera
-    commands.spawn((Camera3dBundle {
-        transform: Transform::from_xyz(-20.5, 30.0, 20.5).looking_at(Vec3::ZERO, Vec3::Y),
+    commands.spawn((Camera3d {       
         ..Default::default()
     },
-    FlyCam)
-    );
+    Transform::from_xyz(-20.5, 30.0, 20.5).looking_at(Vec3::ZERO, Vec3::Y),
+    FlyCam));
 }
 
 

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use bevy::prelude::*;
-
+// use crate::shared::enums::DamageType;
 
 #[derive(Clone, Debug, Eq, Hash, Ord,  Copy, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Pos(pub i32, pub i32);
@@ -33,7 +33,6 @@ pub struct Health {
     pub max: u32,
     pub current: u32,
 }
-
 
 #[derive(Component, Reflect, Debug)]
 pub struct Mana {
@@ -94,3 +93,4 @@ pub struct Attacking {
     //pub enemy_translation: Vec3,
     // pub timer: Timer
 }
+

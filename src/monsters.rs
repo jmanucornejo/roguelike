@@ -48,10 +48,9 @@ impl Plugin for MonstersPlugin {
         // add things to your app here
         app
             .add_systems(
-            Startup, (
-                    spawn_monster_parent
-                              
-                )            
+                OnEnter(ServerState::Initializing), 
+                    spawn_monster_parent                              
+                
             )
             .add_plugins(Sprite3dPlugin)
             .add_loading_state(
@@ -61,11 +60,11 @@ impl Plugin for MonstersPlugin {
             )
             .add_systems(OnExit(ServerState::Initializing), (( setup_map )))
             // DESCOMENTAR pAR  Q SE MUEVAN LOS MONSTRUOS 
-            .add_systems(
+            /*.add_systems(
                 FixedUpdate, (
                     monster_movement_timer_reset.run_if(in_state(ServerState::InGame)),
                 )
-            )
+            )*/
             
             .add_observer(
                 |trigger: Trigger<SpawnMonster>,
@@ -76,8 +75,7 @@ impl Plugin for MonstersPlugin {
                     // You can access the trigger data via the `Observer`
                     let monster_spawner = trigger.event();
              
-                    let parent = parent.single();   
-
+             
                     //let texture = asset_server.load("pig.png");
 
                     let transform = Transform::from_xyz(monster_spawner.pos.0 as f32, 0.0, monster_spawner.pos.1 as f32);  
@@ -87,8 +85,7 @@ impl Plugin for MonstersPlugin {
                         index: 3,
                     };                    
 
-                    commands.entity(parent).with_children(|commands| {
-                        commands.spawn((
+                    let mut monster_commands = commands.spawn((
 
                             transform,
                             Sprite3dBuilder {
@@ -116,17 +113,20 @@ impl Plugin for MonstersPlugin {
                             ),*/
                             RigidBody::KinematicPositionBased,
                             //Collider::capsule(0.4, 1.0),
-                            )
+                            GameVelocity::default(),
+                            Facing(0),
+                            SpriteId(1),
+                            PrevState { translation: transform.translation, rotation: Facing(0)},
+                            NearestNeighbourComponent,
+                            Health { max: 100, current: 100},
+                            TargetPos { position: transform.translation.into() }
                         )
-                        .insert(GameVelocity::default())
-                        .insert(Facing(0))
-                        .insert(SpriteId(1))
-                        .insert(PrevState { translation: transform.translation, rotation: Facing(0)})
-                        .insert(NearestNeighbourComponent)
-                        //.insert(SeenBy::default())
-                        .insert(Health { max: 100, current: 100})
-                        .insert(TargetPos { position: transform.translation.into() });       
-                    });
+                    );
+                    
+
+                    if let Ok(parent) = parent.single() {
+                        monster_commands.insert(ChildOf(parent));
+                    }   
 
                     /*
                     let message = ServerMessages::SpawnProjectile {
@@ -141,7 +141,7 @@ impl Plugin for MonstersPlugin {
 
 
         fn spawn_monster_parent(mut commands: Commands) {
-            commands.spawn((SpatialBundle::default(), MonsterParent, Name::new("Pig Parent")));
+            commands.spawn((Transform::default(), Visibility::default(), MonsterParent, Name::new("Pig Parent")));
         }
 
         fn setup_map(

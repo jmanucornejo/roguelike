@@ -136,8 +136,9 @@ impl Plugin for MenuPlugin {
             camera_query: Query<(Entity, &Camera2d)>,
         ) {
 
-            let (entity, camera) = camera_query.single();
-            commands.entity(entity).despawn();
+            if let Ok((entity, camera)) = camera_query.single() {
+                commands.entity(entity).despawn();
+            }           
            
          }
     

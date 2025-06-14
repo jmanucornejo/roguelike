@@ -32,14 +32,14 @@ impl Plugin for MusicPlugin {
         /*
         fn pause(keyboard_input: Res<Input<KeyCode>>, music_controller: Query<&AudioSink, With<MyMusic>>) {
             if keyboard_input.just_pressed(KeyCode::Space) {
-                if let Ok(sink) = music_controller.get_single() {
+                if let Ok(sink) = music_controller.single() {
                     sink.toggle();
                 }
             }
         }
         
         fn volume(keyboard_input: Res<Input<KeyCode>>, music_controller: Query<&AudioSink, With<MyMusic>>) {
-            if let Ok(sink) = music_controller.get_single() {
+            if let Ok(sink) = music_controller.single() {
                 if keyboard_input.just_pressed(KeyCode::Plus) {
                     sink.set_volume(sink.volume() + 0.1);
                 } else if keyboard_input.just_pressed(KeyCode::Minus) {
