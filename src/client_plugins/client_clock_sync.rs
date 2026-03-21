@@ -81,7 +81,7 @@ fn setup_server_time_and_latency(
 
     client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
     //client.send_message(reliable_channel_id, ping_message);
-    info!("Sent sync time request!");
+    //info!("Sent sync time request!");
 }
 
 fn update_server_time_and_latency(
@@ -94,7 +94,7 @@ fn update_server_time_and_latency(
 
         client.send_message(ClientChannel::SyncTimeRequest, sync_request_message);
         //client.send_message(reliable_channel_id, ping_message);
-        info!("Sent sync time request!");
+        //info!("Sent sync time request!");
     }
 }
 
@@ -164,7 +164,12 @@ fn client_sync_time_system(
                 latency.0 = one_way_latency as u16;*/
                 // info!("server_time_res {:?}, latency  {:?}", server_time_res.0, one_way_latency);
 
+                //  causes subtract with overflow
+                if(now > server_time + one_way_latency) {
+                    continue;
+                }
                 sync_data.total_rtt += rtt;
+               
                 sync_data.total_offset +=  server_time + one_way_latency - now;
                 sync_data.sync_attempts += 1;
 
@@ -174,16 +179,16 @@ fn client_sync_time_system(
                     //latency.0 = one_way_latency;
 
                     let new_clock_offset = sync_data.total_offset / sync_data.sync_attempts as u128; ;
-                    info!("new_clock_offset {:?}",new_clock_offset);
-                    info!("old_clocl_offset {:?}",  clock_offset.0);
+                    //info!("new_clock_offset {:?}",new_clock_offset);
+                    //info!("old_clocl_offset {:?}",  clock_offset.0);
                     if (new_clock_offset as i128 -  clock_offset.0 as i128).abs() > 50 {                                      
                         // la hora se ha alejado más de 100ms, ajustar hora.                    
                         latency.0 = one_way_latency as u16;
                         clock_offset.0 = new_clock_offset;       
 
-                        info!("one_way_latency {:?}",one_way_latency);
+                        /*info!("one_way_latency {:?}",one_way_latency);
                         info!("offset {:?}",clock_offset.0);
-                        info!("estimated server_time {:?}", now + clock_offset.0);                      
+                        info!("estimated server_time {:?}", now + clock_offset.0);  */                    
                 
                     }
                  

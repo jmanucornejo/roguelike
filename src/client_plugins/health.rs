@@ -8,8 +8,8 @@ use bevy::color::palettes::basic::*;
 // use bevy::color::palettes::css::*;
 use shared::components::*;
 use shared::states::ClientState;
-use crate::server_plugins::combat::DamageTick;
-use crate::server_plugins::combat::DamageType;
+use crate::server_plugins::combat::HealthChange;
+use crate::server_plugins::combat::HealthChangeType;
 
 impl Percentage for Health {
     fn value(&self) -> f32 {
@@ -37,7 +37,6 @@ impl Plugin for HealthPlugin {
             )
             // set a different color for the Mana bar
             .insert_resource(ColorScheme::<Mana>::new().foreground_color(ForegroundColor::Static(BLUE.into())))
-            .insert_resource(ColorScheme::<Mana>::new().foreground_color(ForegroundColor::Static(BLUE.into())))
             .add_systems(
                 FixedUpdate, (
                     show_monster_health.run_if(in_state(ClientState::InGame)),
@@ -48,12 +47,12 @@ impl Plugin for HealthPlugin {
      
               
         fn on_damage_tick(
-            trigger: Trigger<DamageTick>,
+            trigger: Trigger<HealthChange>,
             mut commands: Commands,
             asset_server: Res<AssetServer>
         ) {
 
-            let damage_tick: &DamageTick = trigger.event();
+            let damage_tick: &HealthChange = trigger.event();
             let id: Entity = damage_tick.entity;
             
             commands.spawn((
@@ -70,19 +69,30 @@ impl Plugin for HealthPlugin {
            
         }
 
+        
+
         fn show_monster_health(  
-            mut query: Query<(Entity, &mut Health, &mut BarSettings<Health>), Changed<Health>>
+            mut commands: Commands,
+            mut query: Query<(Entity, &mut Health), (Without<BarSettings<Health>>, Changed<Health>)>
         ) {
 
-            for (entity, mut health, mut bar_settings) in query.iter_mut() {
-                //println!("Se detectó cambio de  HP {:?}, {:?} ", health, entity);
+            for (entity, mut health) in query.iter_mut() {
+                println!("Se detectó cambio de  HP {:?}, {:?} ", health, entity);
 
-                if(health.max == health.current) {
+                if health.max == health.current  {
                     continue;
                 }      
-                bar_settings.offset = -1.55;
-                bar_settings.width = 1.2;
-                bar_settings.height = BarHeight::Static(0.10);
+                println!("Se muestra el health bar {:?}, {:?} ", health, entity);
+       
+                commands.entity(entity)                    
+                    .insert(
+                        BarSettings::<Health> {
+                        offset: -1.05,
+                        width: 1.2,
+                        height: BarHeight::Static(0.10),
+                        ..default()
+                    });
+    
             
             }
         }

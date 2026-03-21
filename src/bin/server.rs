@@ -4,23 +4,20 @@
 use bevy::ecs::schedule::ScheduleLabel;
 // use avian3d::prelude::{Collider, GravityScale, LockedAxes, RigidBody};
 use bevy::log::{LogPlugin};
-use bevy::time::Stopwatch;
-use bevy_egui::egui::debug_text::print;
 use bevy_obj::ObjPlugin;
 
 ///use avian3d::math::{AdjustPrecision, Quaternion, Scalar, Vector};
-////use avian3d::prelude::{CoefficientCombine, Collider, ColliderParent, Collisions, Friction, GravityScale, LinearVelocity, LockedAxes, Mass, Position, PostProcessCollisions, Restitution, RigidBody, Rotation, Sensor};
+///use avian3d::prelude::{CoefficientCombine, Collider, ColliderParent, Collisions, Friction, GravityScale, LinearVelocity, LockedAxes, Mass, Position, PostProcessCollisions, Restitution, RigidBody, Rotation, Sensor};
 // use avian3d::{PhysicsPlugins};
 
 use bevy::prelude::*;
-use bevy_asset_loader::prelude::*;
 
 use bevy_renet::netcode::{
-    NetcodeServerPlugin, NetcodeServerTransport, NetcodeTransportError,
+    NetcodeServerPlugin, NetcodeServerTransport,
     ServerAuthentication, ServerConfig,
 };
 //use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
-use bevy_renet::renet::{ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
+use bevy_renet::renet::{ClientId, RenetServer, ServerEvent};
 //use bevy_renet::transport::NetcodeServerPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy::input::common_conditions::input_toggle_active;
@@ -29,17 +26,16 @@ use local_ip_address::local_ip;
 use monsters::*;
 use pathing::*;
 
+use roguelike::client_plugins::health;
 use roguelike::*;
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
 use std::{
     net::{SocketAddr, UdpSocket},
     time::SystemTime,
 };
 use bevy_flycam::prelude::*;
 use std::ops::Div;
-use std::ops::Mul;
-use bevy_spatial::{kdtree::KDTree3, AutomaticUpdate, SpatialAccess};
+use bevy_spatial::{AutomaticUpdate, SpatialAccess};
 use renet_visualizer::{RenetServerVisualizer, RenetVisualizerStyle};
 use bevy_egui::{EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
@@ -114,16 +110,7 @@ fn main() {
             )
         )
         .add_systems(
-            FixedUpdate, (           
-                //network_send_delta_position_system.after(roguelike::pathing::apply_rapier3d_velocity_system),      
-                //network_send_delta_position_system.after(TransformSystem::TransformPropagate),     
-                //network_send_delta_position_system.after(PhysicsSet::Writeback),    
-                // network_send_delta_position_system.after(apply_velocity_system),
-                //network_send_delta_position_system,  
-                //click_move_players_system,
-                line_of_sight
-                //monster_test
-            )
+            FixedUpdate, line_of_sight
         )
      
         .insert_resource(TimestepMode::Fixed {
@@ -155,7 +142,7 @@ fn main() {
         app.add_systems(FixedPostUpdate,    (network_send_delta_position_system));
         
         #[cfg(feature = "absolute_interpolation")]
-        app.add_systems(FixedPostUpdate, (network_send_absolute_position_system));
+        app.add_systems(FixedPostUpdate, network_send_absolute_position_system);
 
         app.run();
     
@@ -203,7 +190,7 @@ fn create_renet_transport() -> NetcodeServerTransport {
     info!("Creating Server! {:?}", server_addr);
 
     let server_config: ServerConfig = ServerConfig {
-        current_time: current_time,
+        current_time,
         max_clients: 64,
         protocol_id: PROTOCOL_ID,
         public_addresses: vec![server_addr],
@@ -219,7 +206,7 @@ fn create_renet_transport() -> NetcodeServerTransport {
 
 }
 
-fn update_visualizer_system(mut egui_contexts: EguiContexts, mut visualizer: ResMut<RenetServerVisualizer<200>>, server: Res<RenetServer>) {
+fn update_visualizer_system(egui_contexts: EguiContexts, mut visualizer: ResMut<RenetServerVisualizer<200>>, server: Res<RenetServer>) {
     visualizer.update(&server);
     //visualizer.show_window(egui_contexts.ctx_mut());
 }
@@ -250,24 +237,9 @@ fn server_events(
                 info!("entity  transform {:?}", transform);
                 
                 // Find all entities within 12 cells of translation.
-                for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
+                for (_, entity) in treeaccess.within_distance(transform.translation, LINE_OF_SIGHT) {
                     // info!("entity {:?}", entity);
 
-                    // Initialize monsters for this new client
-                    /* 
-                    if let Ok( (entity, monster,  monster_transform)) = monsters.get(entity.expect("No entity")) {
-
-                        let message = bincode::serialize(&ServerMessages::SpawnMonster {
-                            entity,
-                            kind: monster.kind.clone(),
-                            translation: monster_transform.translation.into(),
-                            server_time: time.elapsed().as_millis()
-                        })
-                        .unwrap();
-                        server.send_message(*client_id, ServerChannel::ServerMessages, message);
-                    }
-                    */
-                    // Initialize Players for this new client
                     if let Ok( (entity, player,  player_transform)) = players.get(entity.expect("No entity")) {
 
                         let message = bincode::serialize(&ServerMessages::PlayerCreate {
@@ -350,11 +322,11 @@ fn server_events(
                 // Si están a menos de 12, spawnear.
                 for (_entity, player, _player_transform) in players.iter() {
 
-                    for (_, entity) in treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT) {
+                    for (_, entity) in treeaccess.within_distance(transform.translation, LINE_OF_SIGHT) {
                         // info!("entity {:?}", entity);
 
                         if let Some(entity) = entity {
-                            if(entity == player_entity) {
+                            if entity == player_entity {
                                 let message = bincode::serialize(&ServerMessages::PlayerCreate {
                                     id: *client_id,
                                     entity: player_entity,
@@ -436,7 +408,7 @@ fn server_events(
                 PlayerCommand::BasicAttack { entity } => {
                     println!("Received basic attack from client {}: {:?}", client_id, entity);
                     
-                    if let (Some(player_entity)) = lobby.players.get_mut(&client_id) {
+                    if let Some(player_entity) = lobby.players.get_mut(&client_id) {
 
                         if let (Ok((_entity, _player, _player_transform)), Ok((monster_entity, _monster,  monster_transform))) = (players.get(*player_entity), monsters.get(entity)) {
 
@@ -514,7 +486,7 @@ pub fn network_send_absolute_position_system(
       
         for entity in line_of_sight.0.iter() {           
 
-            if let Ok( (entity, transform, mut prev_state)) = entities.get_mut(*entity) {
+            if let Ok( (entity, transform, prev_state)) = entities.get_mut(*entity) {
                 
                 let quantized_position = transform.translation.div(TRANSLATION_PRECISION).as_ivec3(); // TRANSLATION_PRECISION == 0.001
 
@@ -538,7 +510,7 @@ pub fn network_send_absolute_position_system(
 
                     let sync_message = bincode::serialize(&message).unwrap();
                     // Send message to only one client
-                    println!("Sent quantized_position {:?} .", quantized_position);   
+                    //println!("Sent quantized_position {:?} .", quantized_position);   
                     server.send_message(player.id, ServerChannel::ServerMessages, sync_message);                    
        
                 }  
@@ -624,15 +596,15 @@ pub fn line_of_sight(
     mut server: ResMut<RenetServer>, 
     mut players: Query<(&Player, &Transform, &mut LineOfSight), With<Player>>,
     treeaccess: Res<NNTree>, 
-    entities: Query<(Entity, &Transform, &SpriteId, &Facing)>,
+    entities: Query<(Entity, &Transform, &SpriteId, &Facing, Option<&Health>)>,
 ) {
     for (player, transform, mut line_of_sight) in players.iter_mut() {
 
-        let within_distance = treeaccess.within_distance(transform.translation.into(), LINE_OF_SIGHT);
+        let within_distance = treeaccess.within_distance(transform.translation, LINE_OF_SIGHT);
 
         let entities_within_distance: Vec<Entity> = within_distance.iter().filter_map(|z| z.1).collect();
 
-        if(entities_within_distance == line_of_sight.0) {
+        if entities_within_distance == line_of_sight.0 {
            // info!("No ha cambiado line of sight {:?}", entities_within_distance);
             continue;
         }      
@@ -647,15 +619,22 @@ pub fn line_of_sight(
         //println!("Left line of sight: {:?}", removed);
 
        // Spawn all added entities into line of sight
-        for (spawned_entity) in added.iter() {
+        for spawned_entity in added.iter() {
 
-            if let Ok( (entity, transform, sprite_id, facing)) = entities.get(*spawned_entity) {
+            if let Ok( (entity, transform, sprite_id, facing, health)) = entities.get(*spawned_entity) {
+
+            
+                let health_message = match health {
+                    None => None,
+                    Some(health) => Some(health.clone())
+                };
 
                 let message = bincode::serialize(&ServerMessages::SpawnEntity {
-                    entity: entity,
+                    entity,
                     sprite_id: sprite_id.clone(),
                     translation: transform.translation.into(),
-                    facing: facing.clone()
+                    facing: facing.clone(),
+                    health: health_message
                 })
                 .unwrap();
                 server.send_message(player.id, ServerChannel::ServerMessages, message);
@@ -664,7 +643,7 @@ pub fn line_of_sight(
         }
 
         // Despawn all removed entities from line of sight
-        for (despawned_entity) in removed.iter() {
+        for despawned_entity in removed.iter() {
             let message = bincode::serialize(&ServerMessages::DespawnEntity { entity: *despawned_entity }).unwrap();
             server.send_message(player.id, ServerChannel::ServerMessages, message);              
         }        

@@ -28,7 +28,7 @@ pub struct PlayerInput {
 #[derive(Debug, PartialEq, Component, Clone)]
 pub struct AttackingTimer(pub Timer);
 
-#[derive(Component, Reflect, Debug)]
+#[derive(Component, Reflect, Debug, Serialize, Deserialize,Clone)]
 pub struct Health {
     pub max: u32,
     pub current: u32,
@@ -93,4 +93,28 @@ pub struct Attacking {
     //pub enemy_translation: Vec3,
     // pub timer: Timer
 }
+
+
+
+#[derive(Component)]
+pub struct Billboard;
+
+
+#[derive(Component, Debug)]
+pub enum Animation {
+    Idle,
+    Walking,
+    Attacking {        
+        entity: Entity,        
+        enemy: Entity,        
+        attack_speed: f32,        
+        auto_attack: bool
+    },
+    Casting
+}
+
+
+
+#[derive(Component, Deref, DerefMut)]
+pub struct AnimationTimer(pub Timer);
 

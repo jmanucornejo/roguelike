@@ -1,7 +1,7 @@
 use avian3d::math::Scalar;
-use bevy::{pbr::{decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt}, NotShadowCaster, NotShadowReceiver}, prelude::*, window::PrimaryWindow};
+use bevy::{color::palettes::css::RED, pbr::{decal::{clustered::ClusteredDecal, ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt}, NotShadowCaster, NotShadowReceiver}, prelude::*, window::PrimaryWindow};
 use bevy_asset_loader::prelude::*;
-use bevy_panorbit_camera::PanOrbitCamera;
+
 use client_plugins::shared::*;
 use bevy::pbr::ExtendedMaterial;
 use crate::*;
@@ -55,19 +55,49 @@ impl Plugin for PointerPlugin {
                     setup_target_decal
                 ))
             )
+            .add_systems(Update, draw_gizmos)
             .add_systems(Update, (  
                     move_cursor.run_if(in_state(ClientState::InGame)),
                     player_input.run_if(in_state(ClientState::InGame)),        
                 )
             )           
             .add_systems(FixedUpdate, (       
-                    shape_cast.run_if(in_state(ClientState::InGame)),
+                    //shape_cast.run_if(in_state(ClientState::InGame)),
                     update_cursor_system_rapier3d.run_if(in_state(ClientState::InGame)),
                     changed_cursor.run_if(in_state(ClientState::InGame)).after(setup_cursor),
                 )
             );
                 
+        fn calculate_initial_decal_transform(start: Vec3, looking_at: Vec3, size: Vec2) -> Transform {
+            let direction = looking_at - start;
+            let center = start + direction * 0.5;
+            Transform::from_translation(center)
+                .with_scale((size * 0.5).extend(direction.length()))
+                .looking_to(direction, Vec3::Y)
+        }
 
+
+        /// Draws the outlines that show the bounds of the clustered decals.
+        fn draw_gizmos(
+            mut gizmos: Gizmos,
+            decals: Query<(&GlobalTransform), With<ClusteredDecal>>,
+        ) {
+            for (global_transform) in &decals {
+            
+                gizmos.primitive_3d(
+                    &Cuboid {
+                        // Since the clustered decal is a 1×1×1 cube in model space, its
+                        // half-size is half of the scaling part of its transform.
+                        half_size: global_transform.scale() * 0.5,
+                    },
+                    Isometry3d {
+                        rotation: global_transform.rotation(),
+                        translation: global_transform.translation_vec3a(),
+                    },
+                    RED,
+                );
+            }
+        }
 
         fn setup_target_decal(
             mut commands: Commands,
@@ -76,6 +106,46 @@ impl Plugin for PointerPlugin {
             mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
             asset_server: Res<AssetServer>,
         ) {
+
+            commands.spawn((                
+                ClusteredDecal {
+                    //image: asset_server.load("branding/icon.png"), 
+                    image: asset_server.load("grid_whitespace_big.png"),
+                    // Tint with red.
+                    tag: 1,
+                },
+                Target,
+                Name::new("Target"),
+                //Transform::from_scale(Vec3::splat(11.0)),
+                /*Transform {
+                    translation: vec3(1.0,1.0,1.0),
+                    rotation: Quat::from_xyzw(0.0, 0.0, 0.0, 0.0),
+                    scale: Vec3::splat(2.)
+                }*/
+                Transform::from_scale(Vec3::splat(11.0))
+                .looking_at(Vec3::Y, Vec3::Z)
+                //Transform::looking_at(Vec3::Y, Vec3::Z)
+                //calculate_initial_decal_transform(vec3(1.0, 1.0, 1.0), Vec3::ZERO, Vec2::splat(2.)),          
+            ));
+
+             commands.spawn((
+                Name::new("Decal"),
+                ForwardDecal,
+                MeshMaterial3d(decal_standard_materials.add(ForwardDecalMaterial {
+                    base: StandardMaterial {
+                        base_color_texture: Some(asset_server.load("textures/uv_checker_bw.png")),
+                        ..default()
+                    },
+                    extension: ForwardDecalMaterialExt {
+                        depth_fade_factor: 10.0,
+                        
+                    },
+                })),
+                //Transform::from_xyz(11.0, 1., 11.0),
+                Transform::from_scale(Vec3::splat(11.0)),
+            ));
+
+
             commands.spawn((
                 /*DecalBundle {
                     transform: Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(11.0)),
@@ -103,16 +173,15 @@ impl Plugin for PointerPlugin {
                         ..default()
                     },
                     extension: ForwardDecalMaterialExt {
-                        depth_fade_factor: 0.0,
+                        depth_fade_factor: 10.0,
                     },
                     //mesh: meshes.add(decal_mesh_quad(Vec3::Y)),
-                })),
+                })),           
                 Transform::from_scale(Vec3::splat(11.0)),
-                Transform::from_xyz(0.0, 1., 0.0),
-                Target,
+                //Target,
                 NotShadowCaster,
                 NotShadowReceiver,
-                Name::new("Target")
+                //Name::new("Target")
                 )
             );
         }
@@ -262,7 +331,7 @@ impl Plugin for PointerPlugin {
                                     translation.x = translation.x.round();
                                     translation.z = translation.z.round();
                                     //translation.y =  translation.y + 0.15; 
-                                    translation.y = details.witness1.y.round();
+                                    translation.y = details.witness1.y.round() +0.5;
                                     target_transform.translation = translation;
 
                                     /*println!(

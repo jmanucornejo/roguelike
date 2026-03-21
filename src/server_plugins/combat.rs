@@ -5,19 +5,24 @@ use pathing::{get_path_between_translations, TargetPos};
 use crate::{shared::{channels::ServerChannel, components::*, messages::ServerMessages}, *};
 // use avian3d::{parry::shape, prelude::*};
 use shared::states::ServerState;
+use shared::events::*;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum DamageType {
+pub enum HealthChangeType {
     Normal,
     Critical,
 }
 
-#[derive(Event)]
-pub struct DamageTick {
+#[derive(Event, Debug)]
+pub struct HealthChange {
     pub entity: Entity,
+    pub source: Option<Entity>,
+    pub amount: i32,
     pub damage: u32,
-    pub damage_type: DamageType
+    pub damage_type: HealthChangeType
+ 
 }
+
 
 #[derive(Event)]
 struct AttackAnimation {
@@ -34,7 +39,7 @@ pub struct CombatPlugin;
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         // add things to your app here
-        app                     
+        app           
             .add_systems(
                 FixedUpdate, ( 
                     network_change_attacking_state.run_if(in_state(ServerState::InGame)),
@@ -44,8 +49,11 @@ impl Plugin for CombatPlugin {
                     attack.run_if(in_state(ServerState::InGame)),
                 )
             )
-            .add_observer(on_damage);
-            //.observe(on_attack_animation);
+            .add_observer(on_health_change)
+            .add_observer(on_death_despawn_monsters)
+            .add_observer(on_death_spawn_loot)
+            .add_observer(on_death_give_experience);
+
 
 
         fn aggro_rapier3d(
@@ -74,22 +82,15 @@ impl Plugin for CombatPlugin {
                 
                 
                         if is_attacking.is_some() {
-                            info!("walking? {:?}", is_walking);  
+                            //info!("walking? {:?}", is_walking);  
                             continue;
                         }
-                        info!("ATACARRRRRRRRRRRR");  
+                        //info!("ATACARRRRRRRRRRRR");  
                         // STOP WALKING. ALREADY NEAR TARGET.
                         is_walking = None;
                                 
                         let mut timer = Timer::from_seconds(1.0, TimerMode::Once);
                         timer.pause(); // Timer pausado hasta que este en rango de ataque;         
-
-                        /*commands.trigger(AttackAnimation { 
-                            entity: entity,
-                            enemy: aggroed.enemy,
-                            attack_speed: 0.5,
-                            auto_attack: aggroed.auto_attack
-                        });   */   
 
                         commands.entity(entity)
                         .insert(AttackingTimer(timer))
@@ -186,10 +187,12 @@ impl Plugin for CombatPlugin {
                 }                      
                 
                 info!("Finalizó el timer. Timer: {:?}", attacking_timer.0);
-                commands.trigger(DamageTick { 
+                commands.trigger(HealthChange { 
                     entity: attacking.enemy,
+                    source: Some(entity),
+                    amount: 5,
                     damage: 5,
-                    damage_type: DamageType::Normal
+                    damage_type: HealthChangeType::Normal
                 });      
 
                 if(attacking.auto_attack == false) {
@@ -235,7 +238,7 @@ impl Plugin for CombatPlugin {
                     }                      
                     
                     info!("Finalizó el timer. Timer: {:?}", attacking.timer);
-                    commands.trigger(DamageTick { 
+                    commands.trigger(HealthChange { 
                         entity: attacking.enemy,
                         damage: 10
                     });      
@@ -327,64 +330,97 @@ impl Plugin for CombatPlugin {
                 
             }
             
-        }
-      
+        }     
        
-        /*fn on_attack_animation(
-            trigger: Trigger<AttackAnimation>, 
-            mut query: Query<(Entity, &mut Health)>,
+     
+        fn on_death_despawn_monsters(
+            trigger: Trigger<DeathEvent>, 
+            mut query: Query<(Entity)>,
             mut commands: Commands,
         ) {
             // If a triggered event is targeting a specific entity you can access it with `.entity()`
-            let attack_animation: &AttackAnimation = trigger.event();
-            let id: Entity = damage_tick.entity;
-
-            if let Ok((entity, mut health)) = query.get_mut(id) {
-                info!("Entity  {:?} damaged.", id.index());
-                if(health.current <= damage_tick.damage) {
-
-                    commands.entity(entity).despawn();
-                    info!("Muere la entidad:  {:?} ", entity);
-                    // Si es jugador, mantenrlo muerto en el piso.
-                    // Si es monstruo, debe soltar ítems.
-                    
-                }
-                else {
-                    health.current -= damage_tick.damage;
-                    info!("Health  {:?} ", health);
-                }
-           
+            let death_event = trigger.event();
+            let id: Entity = death_event.entity;            
+            info!("Muere la entidad:  {:?} ", trigger.target());
+            if let Ok((entity)) = query.get_mut(id) {
+             
+                commands.entity(entity).despawn();
+                info!("Muere la entidad:  {:?} ", entity);
+                // Si es jugador, mantenrlo muerto en el piso.
+                // Si es monstruo, debe soltar ítems.
+        
             }          
     
-        }*/
+        }
 
-        fn on_damage(
-            trigger: Trigger<DamageTick>, 
+        fn on_death_spawn_loot(
+            trigger: Trigger<DeathEvent>, 
+            mut query: Query<(&Transform)>,
+            mut commands: Commands,
+        ) {
+            // If a triggered event is targeting a specific entity you can access it with `.entity()`
+            let death_event = trigger.event();
+            let id: Entity = death_event.entity;            
+
+            if let Ok((transform)) = query.get_mut(id) {
+             
+                info!("Se crea loot en:  {:?} ", transform.translation);
+                // Si es jugador, mantenrlo muerto en el piso.
+                // Si es monstruo, debe soltar ítems.
+        
+            }          
+    
+        }
+
+         fn on_death_give_experience(
+            trigger: Trigger<DeathEvent>, 
+            mut query: Query<(&Monster)>,
+            mut commands: Commands,
+        ) {
+            // If a triggered event is targeting a specific entity you can access it with `.entity()`
+            let death_event = trigger.event();
+            let id: Entity = death_event.entity;            
+
+            if let Ok((monster)) = query.get_mut(id) {
+             
+                info!("Se da X experiencia a:  {:?} ", death_event.killer );
+                // Si es jugador, mantenrlo muerto en el piso.
+                // Si es monstruo, debe soltar ítems.
+        
+            }          
+    
+        }
+        fn on_health_change(
+            trigger: Trigger<HealthChange>, 
             mut query: Query<(Entity, &mut Health)>,
             mut commands: Commands,
         ) {
             // If a triggered event is targeting a specific entity you can access it with `.entity()`
-            let damage_tick: &DamageTick = trigger.event();
-            let id: Entity = damage_tick.entity;
+            let health_change: &HealthChange = trigger.event();
+            let id: Entity = health_change.entity;
 
             if let Ok((entity, mut health)) = query.get_mut(id) {
                 info!("Entity  {:?} damaged.", id.index());
-                if(health.current <= damage_tick.damage) {
+                if(health.current <= health_change.damage) {
 
-                    commands.entity(entity).despawn();
-                    info!("Muere la entidad:  {:?} ", entity);
-                    // Si es jugador, mantenrlo muerto en el piso.
-                    // Si es monstruo, debe soltar ítems.
+                    commands.trigger(DeathEvent { 
+                        entity: health_change.entity,
+                        killer: health_change.source,
+                    });                     
+
+                
                     
                 }
                 else {
-                    health.current -= damage_tick.damage;
+                    health.current -= health_change.damage;
                     info!("Health  {:?} ", health);
                 }
            
             }          
     
         }
+
+        
 
         pub fn network_change_attacking_state(
             mut server: ResMut<RenetServer>, 
@@ -415,6 +451,8 @@ impl Plugin for CombatPlugin {
             }      
         }
 
+
+
         pub fn network_send_delta_health_system(
             mut server: ResMut<RenetServer>, 
             players: Query<(&Player, &LineOfSight)>,
@@ -429,6 +467,7 @@ impl Plugin for CombatPlugin {
                         
                         let message= ServerMessages::HealthChange {
                             entity,
+                            amount: 5,
                             max: health.max,
                             current: health.current,
                         };
@@ -530,9 +569,9 @@ pub fn is_in_attack_range(attack_range: f32, attacker_translation: Vec3, attacke
 
     // let distance = (attacker_translation - attacked_translation).round();
     let distance = attacker_translation - attacked_translation;
-    info!("Distancia {:?}", distance);
+    //info!("Distancia {:?}", distance);
     if(distance.x.abs() <= attack_range && distance.z.abs() <= attack_range) {
-        info!("esta en attack range");
+        //info!("esta en attack range");
         return true;
     }  
     

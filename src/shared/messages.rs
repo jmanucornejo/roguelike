@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use bevy::prelude::*;
 use bevy_renet::renet::ClientId;
-use crate::shared::components::{Facing, MonsterKind, SpriteId};
+use crate::shared::components::{Facing, Health, MonsterKind, SpriteId};
 // use crate::shared::enums::DamageType;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,7 +54,8 @@ pub enum ServerMessages {
         entity: Entity,
         sprite_id: SpriteId,
         translation: [f32; 3],
-        facing: Facing
+        facing: Facing,
+        health: Option<Health>
     },
     PlayerRemove {
         id: ClientId,
@@ -83,14 +84,10 @@ pub enum ServerMessages {
     /*HealingTick {
         entity: Entity,
         healing: u32
-    },*/
-    DamageTick {
-        entity: Entity,
-        damage: u32,
-        damage_type: crate::server_plugins::combat::DamageType
-    },
+    },*/ 
     HealthChange {
         entity: Entity,
+        amount: i32,
         max: u32,
         current: u32,
     },

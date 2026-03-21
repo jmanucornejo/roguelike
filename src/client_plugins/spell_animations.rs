@@ -316,7 +316,7 @@ impl Plugin for SpellAnimationsPlugin {
             }                  
         }
 
-        pub fn remove_spell_shadows(
+        pub fn _remove_spell_shadows(
             mut commands: Commands, 
             children: Query<&Children>,
             mut spells: Query<Entity, Added<SpellId>>,

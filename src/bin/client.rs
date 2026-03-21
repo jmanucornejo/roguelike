@@ -1,7 +1,6 @@
 
 use bevy::core_pipeline::prepass::DepthPrepass;
 
-use bevy::pbr::NotShadowReceiver;
 // use avian3d::math::Scalar;
 // use avian3d::prelude::*;
 use bevy_atmosphere::prelude::*;
@@ -10,25 +9,24 @@ use bevy_sprite3d::*;
 use bevy_obj::ObjPlugin;
 use local_ip_address::local_ip;
 use client_plugins::interpolation::*;
-use client_plugins::pointer::*;
 use client_plugins::client_clock_sync::*;
 use client_plugins::shared::*;
 use shared::components::*;
 use shared::channels::*;
 use shared::constants::*;
 use shared::messages::*;
+use shared::resources::*;
 use shared::states::ClientState;
 use std::ops::Mul;
 
-use bevy_health_bar3d::configuration::ForegroundColor;
 use bevy_health_bar3d::prelude::{
-    BarHeight, BarSettings, ColorScheme, HealthBarPlugin, Percentage,
+    BarHeight, BarSettings,
 };
 
 use roguelike::*;
 
 use bevy::{  
-    asset::LoadState, input::mouse::MouseWheel, log::LogPlugin, pbr::NotShadowCaster, prelude::*, render::render_resource::Texture, window::{PrimaryWindow, Window, WindowResolution}};
+    log::LogPlugin, pbr::NotShadowCaster, prelude::*, window::{Window, WindowResolution}};
 // pub use bevy_renet::renet::transport::ClientAuthentication;
 pub use bevy_renet::netcode::{
     ClientAuthentication, NetcodeClientPlugin
@@ -38,39 +36,21 @@ use bevy_renet::*;
 use bevy_renet::netcode::*;
 use std::f32::consts::TAU;
 use std::{
-    collections::{HashMap, VecDeque}, net::{SocketAddr, UdpSocket}, time::{Duration, SystemTime}
+    collections::HashMap, net::{SocketAddr, UdpSocket}, time::SystemTime
 };
 use bevy_asset_loader::prelude::*;
 
-use bevy_inspector_egui::prelude::ReflectInspectorOptions;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
-use bevy_inspector_egui::InspectorOptions;
 use bevy::input::common_conditions::input_toggle_active;
 // use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TouchControls};
+use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use bevy_rapier3d::prelude::*;
 
 
 
-
-#[derive(Component)]
-struct Billboard;
-
 #[derive(Component)]
 struct Hovered;
 
-#[derive(Component, Debug)]
-enum Animation {
-    Idle,
-    Walking,
-    Attacking {
-        entity: Entity,
-        enemy: Entity,
-        attack_speed: f32,
-        auto_attack: bool
-    },
-    Casting
-}
 
 
 #[derive(Debug)]
@@ -88,21 +68,8 @@ struct ClientLobby {
 struct CurrentClientId(u64);
 
 
-#[derive(Debug, Resource)]
-struct CameraFacing(u8);
 
 // custom implementation for unusual values
-impl Default for CameraFacing {
-    fn default() -> Self {
-        CameraFacing(0)
-    }
-}
-
-
-
-#[derive(Component, Deref, DerefMut)]
-struct AnimationTimer(Timer);
-
 
 
 
@@ -213,6 +180,7 @@ fn main() {
         .add_plugins((
             InterpolationPlugin, 
             //client_plugins::clock_sync::ClockSyncPlugin,
+            client_plugins::animations::AnimationsPlugin,
             ClientClockSyncPlugin,
             //client_plugins::music::MusicPlugin, 
             client_plugins::pointer::PointerPlugin,
@@ -234,7 +202,7 @@ fn main() {
                 client_sync_players.run_if(in_state(ClientState::InGame)),
                 draw_player_sprites.run_if(in_state(ClientState::InGame)).after(client_sync_players),
                 camera_follow.run_if(in_state(ClientState::InGame)),
-                sprite_movement.run_if(in_state(ClientState::InGame)),
+                // sprite_movement.run_if(in_state(ClientState::InGame)),
 
             )
         );
@@ -304,7 +272,7 @@ fn client_send_player_commands(mut player_commands: EventReader<PlayerCommand>, 
 fn draw_player_sprites( 
     mut commands: Commands,
     mut sprite_params : Sprite3dParams,  
-    mut entities: Query<(Entity, &Transform), ( Or<(Added<Player>, Added<ControlledPlayer>)>)>,
+    mut entities: Query<(Entity, &Transform), Or<(Added<Player>, Added<ControlledPlayer>)>>,
     chaski: Res<ChaskiAssets>,
 ){
     for (entity, transform,) in entities.iter_mut() {   
@@ -346,7 +314,7 @@ fn draw_player_sprites(
                 ..default()
             }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),
             Name::new("PlayerSprite"),
-            Billboard
+            Billboard,
         ));
 
         println!("Draw player sprite {:?}", transform);     
@@ -370,7 +338,7 @@ fn client_sync_players(
     seal_assets            : Res<SealAssets>,
     mut sprite_params : Sprite3dParams,       
     mut entities: Query<(Entity, &Transform, &mut PositionHistory)>, 
-    mut render_time: ResMut<RenderTime>,
+    render_time: ResMut<RenderTime>,
 ) {
     let client_id = client_id.0;
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
@@ -390,36 +358,11 @@ fn client_sync_players(
                         Mesh3d(sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.)))),
                         MeshMaterial3d(sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.0))),
                         Transform::from_xyz(translation[0], translation[1], translation[2]),
-                        /*PbrBundle {
-                            mesh: sprite_params.meshes.add(Mesh::from(Capsule3d::new(0.5, 1.))),
-                            material: sprite_params.materials.add(Color::srgba(0.8, 0.7, 0.6, 0.0)),
-                            transform: Transform::from_xyz(translation[0], translation[1], translation[2]),
-                            ..Default::default()
-                        }, */ 
-                        /*Sprite3d {
-                            image: chaski.sprite.clone(),
-                            pixels_per_metre: 48.,
-                            //pixels_per_metre: 128.,
-                            alpha_mode: AlphaMode::Blend,
-                            unlit: true,
-                            transform: Transform::from_xyz(translation[0], translation[1]-2.0, translation[2]),
-                            // transform: Transform::from_xyz(0., 0., 0.),
-                            //pivot: Some(Vec2::new(0.5, 0.5)),
-                            pivot: Some(Vec2::new(0.5, 0.)), // para que gire sobre los pies y no del centro.
-                            ..default()
-                        }.bundle_with_atlas(&mut sprite_params,texture_atlas.clone()),*/
                         Name::new("Player"),
-                        //Collider::capsule(0.4, 1.0),
-                        //RigidBody::Dynamic     
                         NotShadowCaster,
                         Collider::capsule_y(0.5, 0.5),
-                        /*CollisionGroups::new(
-                            Group::GROUP_1,
-                            Group::GROUP_2,
-                        ),*/
                         ActiveCollisionTypes::KINEMATIC_STATIC,
                         RigidBody::KinematicPositionBased,
-                        //Mass(5.0),
                         Health {
                             max: 100,
                             current: 100,
@@ -540,7 +483,7 @@ fn client_sync_players(
                         ..default()
                     }.bundle_with_atlas(&mut sprite_params, texture_atlas.clone()),    
                     kind,
-                    Name::new("Pig"),
+                    Name::new("Pig"),                   
                     Transform::from_translation(translation.into()),
                    
                     )
@@ -561,7 +504,7 @@ fn client_sync_players(
                 });*/
                 network_mapping.0.insert(entity, monster_entity.id());
             },
-            ServerMessages::SpawnEntity { entity, sprite_id, translation , facing} => {    
+            ServerMessages::SpawnEntity { entity, sprite_id,  translation , facing, health} => {    
            
                 let texture_atlas: TextureAtlas =  TextureAtlas {
                     layout: seal_assets.layout.clone(),
@@ -596,9 +539,8 @@ fn client_sync_players(
                         hp: 100,
                         kind: MonsterKind::Pig 
                     },
-                    NotShadowCaster,
-                
-                    Name::new("Pig")
+                    NotShadowCaster,                
+                    Name::new("Monster")
                     )
                 );       
 
@@ -606,18 +548,26 @@ fn client_sync_players(
 
                 println!("Client entity  {:?} ", client_entity.id());
 
+                if let Some(health) = health {
+                    println!("Health  {:?} ", health);
+                    if(health.max != health.current) {
+                         println!("Only show health of hit enemies");
+                        client_entity
+                            .insert(
+                                BarSettings::<Health> {
+                                offset: -1.05,
+                                width: 1.2,
+                                height: BarHeight::Static(0.10),
+                                ..default()
+                            });
+                    }
+                    client_entity.insert(health);
+
+                    
+                   
+                }
+
                 client_entity
-                    .insert(  Health {
-                        max: 100,
-                        current: 100,
-                    })
-                    .insert(
-                        BarSettings::<Health> {
-                        offset: 0.,
-                        width: 0.,
-                        height: BarHeight::Static(0.0),
-                        ..default()
-                    })
                     //.insert(Billboard)
                     .insert(GameVelocity::default())
                     .insert(PositionHistory::new(Vec3 {x: translation[0], y: translation[1]+1.0, z: translation[2]}, render_time.0))
@@ -634,7 +584,7 @@ fn client_sync_players(
             ServerMessages::DespawnEntity { entity } => {
                 println!("Entity despawned {:?} ", entity);
                 if let Some(entity) = network_mapping.0.remove(&entity) {
-                    commands.entity(entity).despawn_recursive();
+                    commands.entity(entity).despawn();
                 }
             },
             #[cfg(not(feature = "absolute_interpolation"))]
@@ -667,28 +617,16 @@ fn client_sync_players(
                     if let Ok( (final_entity, transform, mut position_history)) = entities.get_mut(*client_entity) {                    
 
                         let quantized_transform = IVec3 { 
-                            x: x,
-                            y: y,
-                            z: z
+                            x,
+                            y,
+                            z
                         };       
                         position_history.add_absolute_position(quantized_transform.as_vec3().mul(TRANSLATION_PRECISION),server_time);       
 
                     }
                 }            
             },
-            ServerMessages::DamageTick { entity, damage, damage_type} => {
-                // println!("Cambio el HP {}, {} ", max, current);
-                if let Some(client_entity) = network_mapping.0.get(&entity) {
-
-                    commands.trigger(server_plugins::combat::DamageTick { 
-                        entity: *client_entity,                    
-                        damage: damage,
-                        damage_type: damage_type
-                    });      
-
-                }
-            },
-            ServerMessages::HealthChange { entity, max, current} => {
+            ServerMessages::HealthChange { entity, amount,  max, current} => {
                 // println!("Cambio el HP {}, {} ", max, current);
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
                     commands.entity(*client_entity).insert(Health { max, current });
@@ -700,8 +638,8 @@ fn client_sync_players(
                     commands.entity(*client_entity).insert(Animation::Attacking { 
                         entity: *client_entity,
                         enemy: *client_enemy,
-                        attack_speed: attack_speed,
-                        auto_attack: auto_attack
+                        attack_speed,
+                        auto_attack
                     });
                 }
             }
@@ -714,13 +652,13 @@ fn client_sync_players(
 fn billboard(
     mut camera_query: Query< (&Transform, &PanOrbitCamera),  (With<Camera>, Without<Billboard>, Changed<Transform>) >,
     //mut player_query: Query<&mut Transform, (With<ControlledPlayer>, Without<Monster>)>,
-    mut entities_query: Query<(&mut Transform), (With<Billboard>)>
+    mut entities_query: Query<&mut Transform, With<Billboard>>
 ) {
 
  
-    if let Ok((mut camera_transform, pan_cam)) = camera_query.single_mut() {
+    if let Ok((camera_transform, pan_cam)) = camera_query.single_mut() {
  
-         for (mut entity_transform) in entities_query.iter_mut() {     
+         for mut entity_transform in entities_query.iter_mut() {     
           
             if let Some(yaw) = pan_cam.yaw {
                 entity_transform.rotation =  Quat::from_rotation_y(yaw);    
@@ -830,10 +768,6 @@ fn setup_camera(
             // we don't set transform on the camera.
             Camera3d::default(),
             Transform::from_translation(Vec3::new(0.0, 25.5, 5.0)),
-            /*Camera3dBundle {
-                transform: Transform::from_translation(Vec3::new(0.0, 25.5, 5.0)),
-                ..default()
-            },*/
             PanOrbitCamera {
                  // Panning the camera changes the focus, and so you most likely want to disable
                 // panning when setting the focus manually
@@ -856,17 +790,14 @@ fn setup_camera(
 
 
 fn camera_follow(
-    mut camera_query: Query<(
-       // &mut LookTransform, 
-  
-        &mut PanOrbitCamera),  (With<Camera>, Without<ControlledPlayer>)>,
+    mut camera_query: Query<&mut PanOrbitCamera,  (With<Camera>, Without<ControlledPlayer>)>,
     player_query: Query<&Transform, (With<ControlledPlayer>, Changed<Transform>)>
 ) {
     
     if let (Ok(player_transform), Ok(mut pan_cam)) = (player_query.single(), camera_query.single_mut()) {
      
         //cam.look = Transform::from_xyz(0., 8.0, 2.5).looking_at(player_transform.translation.into(), Vec3::Y);
-         pan_cam.target_focus  = player_transform.translation.into();
+         pan_cam.target_focus  = player_transform.translation;
          pan_cam.force_update = true;
         /*cam_transform.eye.x = player_transform.translation.x;
         cam_transform.eye.z = player_transform.translation.z + 15.5; // Con esto se mueve el angulo de la camara
@@ -882,16 +813,16 @@ fn set_camera_facing(
     mut camera_facing: ResMut<CameraFacing>
 ) {
  
-    if let Ok((mut camera_transform, pan_cam)) = camera_query.single_mut() {
+    if let Ok((camera_transform, pan_cam)) = camera_query.single_mut() {
         if let Some(yaw) = pan_cam.yaw {
           
             let mut rotation = ((8.0 * (yaw.to_degrees()) / 360.0).round() % 8.0) as i32;
             
-            if(rotation < 0) {
+            if rotation < 0 {
                 rotation += 8;
             }
 
-            if(rotation as u8 != camera_facing.0) {
+            if rotation as u8 != camera_facing.0 {
                 camera_facing.0 = rotation as u8;    
                 println!("camera_facing {:?}", camera_facing.0);
             }
@@ -914,50 +845,50 @@ fn set_entities_facing(
         let z = (velocity.0.z * 1000.0).round() / 1000.0;        
         
         // Mirando hacia arriba
-        if(z > 0. && x == 0.0) {
+        if z > 0. && x == 0.0 {
             *facing = Facing(0);
           
         }
         // Mirando hacia la arriba a la derecha
-        else if(z > 0. && x < 0.0) {
+        else if z > 0. && x < 0.0 {
             *facing = Facing(1);
            
         }
         // Mirando hacia la derecha
-        else if(z == 0. && x < 0.0) {
+        else if z == 0. && x < 0.0 {
             *facing = Facing(2);
             
         }
         // Mirando hacia la abajo a la derecha
-        else if(z < 0. && x < 0.0) {
+        else if z < 0. && x < 0.0 {
             *facing = Facing(3);
            
         }
         // Mirando hacia abajo
-        else if(z < 0. && x == 0.0) {
+        else if z < 0. && x == 0.0 {
             *facing = Facing(4);
            
         }
         // Mirando hacia la abajo a la izquierda
-        else if(z < 0. && x > 0.0) {
+        else if z < 0. && x > 0.0 {
             *facing = Facing(5);
            
         }
         // Mirando hacia la izquierda
-        else if(z == 0. && x > 0.0) {
+        else if z == 0. && x > 0.0 {
             *facing = Facing(6);
             
         }
         
         // Mirando hacia la arriba a la izquierda
-        else if(z > 0. && x > 0.0) {
+        else if z > 0. && x > 0.0 {
             *facing = Facing(7);
            
         }           
     }
 }
 
-fn sprite_movement(
+/*fn sprite_movement(
     time: Res<Time>,
     mut q_parent: Query<(&mut AnimationTimer, &mut Facing, &GameVelocity, &mut Animation)>,
     mut q_child: Query<(&ChildOf, &mut Sprite3d)>,
@@ -968,7 +899,7 @@ fn sprite_movement(
     for (parent, mut sprite) in q_child.iter_mut() {
 
         
-        if let Ok ((mut timer, mut facing, velocity, mut animation)) = q_parent.get_mut(parent.get()) {
+        if let Ok ((mut timer, facing, velocity, animation)) = q_parent.get_mut(parent.get()) {
 
 
             //println!("Animation {:?}", animation);  
@@ -998,7 +929,7 @@ fn sprite_movement(
             let x = (velocity.0.x * 1000.0).round() / 1000.0;
             let z = (velocity.0.z * 1000.0).round() / 1000.0;
           
-            if(z != 0. || x  != 0.0) { 
+            if z != 0. || x  != 0.0 { 
 
                 //let row_index = (8 * atlas.index / 64) % 8;
 
@@ -1032,5 +963,5 @@ fn sprite_movement(
     }
 
     
-}
+}*/
 

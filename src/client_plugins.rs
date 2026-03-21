@@ -5,5 +5,6 @@ pub mod music;
 pub mod pointer;
 pub mod health;
 pub mod menu;
+pub mod animations;
 //pub mod water;
 pub mod spell_animations;
