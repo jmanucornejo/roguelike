@@ -1,5 +1,6 @@
 pub mod action_bar;
 pub mod animations;
+pub mod casting;
 pub mod damage_numbers;
 pub mod health;
 pub mod health_bars;

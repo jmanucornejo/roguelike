@@ -1,4 +1,6 @@
-use crate::shared::gameplay::components::{Facing, Health, MonsterKind, SpriteId};
+use crate::shared::gameplay::components::{
+    CharacterId, Facing, Health, Mana, MonsterKind, SpriteId,
+};
 use bevy::prelude::*;
 use bevy_renet::renet::ClientId;
 use serde::{Deserialize, Serialize};
@@ -31,7 +33,12 @@ pub enum ServerMessages {
     PlayerCreate {
         entity: Entity,
         id: ClientId,
+        character_id: CharacterId,
         translation: [f32; 3],
+        facing: Facing,
+        health: Health,
+        mana: Mana,
+        attack_speed: f32,
         server_time: u128,
     },
     SpawnMonster {
@@ -50,6 +57,11 @@ pub enum ServerMessages {
     },
     PlayerRemove {
         id: ClientId,
+    },
+    MovementRejected {
+        entity: Entity,
+        translation: [f32; 3],
+        server_time: u128,
     },
     DespawnEntity {
         entity: Entity,
@@ -77,6 +89,19 @@ pub enum ServerMessages {
     AttackStopped {
         entity: Entity,
     },
+    SpellCastStarted {
+        entity: Entity,
+        spell_id: u16,
+        target: Vec3,
+        cast_time_ms: u32,
+        facing: Facing,
+    },
+    SpellCastCompleted {
+        entity: Entity,
+        spell_id: u16,
+        target: Vec3,
+        cooldown_ms: u32,
+    },
     SpawnProjectile {
         entity: Entity,
         translation: [f32; 3],
@@ -103,6 +128,7 @@ pub struct EntitySnapshot {
 #[derive(Debug, Serialize, Deserialize, Message)]
 pub enum PlayerCommand {
     Move { destination_at: Vec3 },
+    StopMoving,
     BasicAttack { entity: Entity },
-    Cast { cast_at: Vec3 },
+    Cast { spell_id: u16, cast_at: Vec3 },
 }
