@@ -45,8 +45,7 @@ fn advance_attack_frame(current_frame: usize, advances: usize, auto_attack: bool
 }
 
 fn facing_world_direction(facing: u8) -> Vec3 {
-    let angle = facing as f32 * DIRECTION_ANGLE;
-    Vec3::new(-angle.sin(), 0.0, angle.cos())
+    world_direction_from_facing(facing)
 }
 
 fn atlas_direction(camera: &Transform, world_direction: Vec3) -> u8 {
@@ -64,7 +63,16 @@ fn atlas_direction(camera: &Transform, world_direction: Vec3) -> u8 {
     octant.rem_euclid(8) as u8
 }
 
-fn animation_world_direction(velocity: Vec3, last_direction: Option<Vec3>, facing: u8) -> Vec3 {
+fn animation_world_direction(
+    animation: &Animation,
+    velocity: Vec3,
+    last_direction: Option<Vec3>,
+    facing: u8,
+) -> Vec3 {
+    if matches!(animation, Animation::Casting) {
+        return facing_world_direction(facing);
+    }
+
     let planar_velocity = Vec3::new(velocity.x, 0.0, velocity.z);
     if planar_velocity.length_squared() > f32::EPSILON {
         planar_velocity.normalize()
@@ -84,7 +92,7 @@ fn align_billboard_to_camera(sprite_transform: &mut Transform, yaw: f32, pitch: 
 }
 
 #[derive(Component, Debug, Clone, Copy)]
-struct LastAnimationDirection(Vec3);
+pub(crate) struct LastAnimationDirection(pub(crate) Vec3);
 
 #[derive(Component)]
 pub(crate) struct WalkingSpriteVisual;
@@ -157,8 +165,14 @@ impl Plugin for AnimationsPlugin {
             }
         }
 
-        fn set_entities_facing(mut query: Query<(&mut Facing, &GameVelocity)>) {
-            for (mut facing, velocity) in query.iter_mut() {
+        fn set_entities_facing(mut query: Query<(&mut Facing, &GameVelocity, &Animation)>) {
+            for (mut facing, velocity, animation) in query.iter_mut() {
+                // Casting faces the server-confirmed spell target. A replicated
+                // velocity from the previous snapshot must not overwrite it.
+                if matches!(animation, Animation::Casting) {
+                    continue;
+                }
+
                 if velocity.0 == Vec3::ZERO {
                     continue;
                 }
@@ -348,8 +362,12 @@ impl Plugin for AnimationsPlugin {
 
                     // Cuando se cambia la rotación, se debe ajustar el sprite.
                     let previous_direction = last_direction.as_deref().map(|direction| direction.0);
-                    let world_direction =
-                        animation_world_direction(velocity.0, previous_direction, facing.0);
+                    let world_direction = animation_world_direction(
+                        &animation,
+                        velocity.0,
+                        previous_direction,
+                        facing.0,
+                    );
                     if velocity.0.x * velocity.0.x + velocity.0.z * velocity.0.z > f32::EPSILON {
                         let direction = world_direction;
                         if let Some(last_direction) = last_direction.as_deref_mut() {
@@ -450,12 +468,25 @@ mod tests {
     fn stopping_preserves_the_last_precise_movement_direction() {
         let camera = camera_at(Vec3::new(0.0, 10.0, 10.0));
         let last_direction = Vec3::new(0.1, 0.0, 1.0).normalize();
-        let stopped_direction = animation_world_direction(Vec3::ZERO, Some(last_direction), 7);
+        let stopped_direction =
+            animation_world_direction(&Animation::Idle, Vec3::ZERO, Some(last_direction), 7);
 
         assert_eq!(atlas_direction(&camera, stopped_direction), 4);
         assert_eq!(
-            atlas_direction(&camera, animation_world_direction(Vec3::ZERO, None, 7)),
+            atlas_direction(
+                &camera,
+                animation_world_direction(&Animation::Idle, Vec3::ZERO, None, 7)
+            ),
             3
+        );
+    }
+
+    #[test]
+    fn casting_uses_confirmed_facing_instead_of_the_previous_walk_direction() {
+        assert!(
+            animation_world_direction(&Animation::Casting, Vec3::ZERO, Some(Vec3::NEG_Z), 6,)
+                .dot(Vec3::X)
+                > 1.0 - 1e-5
         );
     }
 

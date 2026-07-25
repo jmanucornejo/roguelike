@@ -6,12 +6,14 @@ use crate::client::assets::*;
 use crate::client::network::clock_sync::*;
 use crate::client::network::movement::*;
 use crate::client::presentation::animations::{AttackSpriteVisual, WalkingSpriteVisual};
+use crate::client::presentation::casting::{
+    ConfirmedSpellCastCompleted, ConfirmedSpellCastStarted,
+};
 use crate::client::presentation::damage_numbers::{DamageNumberEvent, DamageNumbersPlugin};
-use crate::client::presentation::water_material::{move_water, WaterMaterial};
 use crate::client::state::*;
 use crate::shared::constants::*;
 use crate::shared::gameplay::components::*;
-use crate::shared::gameplay::entities::Player;
+use crate::shared::gameplay::entities::{AttackSpeed, Player};
 use crate::shared::network::{channels::*, messages::*};
 use crate::shared::states::ClientState;
 use crate::world::setup_level;
@@ -34,7 +36,7 @@ use bevy::{
     pbr::AtmosphereSettings,
     post_process::bloom::Bloom,
     prelude::*,
-    window::{Window, WindowResolution},
+    window::{close_when_requested, Window, WindowCloseRequested, WindowResolution},
 };
 // pub use bevy_renet::renet::transport::ClientAuthentication;
 use bevy_asset_loader::prelude::*;
@@ -93,10 +95,7 @@ pub fn run() {
     .add_plugins(WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)))
     .add_plugins(crate::client::presentation::menu::MenuPlugin)
     .add_plugins(ObjPlugin)
-    .add_plugins((
-        PanOrbitCameraPlugin,
-        MaterialPlugin::<WaterMaterial>::default(),
-    ))
+    .add_plugins(PanOrbitCameraPlugin)
     // .add_plugins(LookTransformPlugin)
     //.add_plugins(DefaultPlugins)
     .add_plugins(RenetClientPlugin)
@@ -115,21 +114,24 @@ pub fn run() {
     .add_message::<PlayerCommand>()
     .add_plugins(NetcodeClientPlugin)
     .add_systems(
-        OnEnter(ClientState::InGame),
-        (setup_level, setup_camera, move_water),
+        Last,
+        disconnect_on_window_close.before(close_when_requested),
     )
+    .add_systems(OnEnter(ClientState::InGame), (setup_level, setup_camera))
     .add_plugins(Sprite3dPlugin)
     .add_plugins((
         InterpolationPlugin,
         // crate::client::network::clock_sync::ClientClockSyncPlugin,
         crate::client::presentation::action_bar::ActionBarPlugin,
         crate::client::presentation::animations::AnimationsPlugin,
+        crate::client::presentation::casting::CastingPlugin,
         DamageNumbersPlugin,
         ClientClockSyncPlugin,
         // crate::client::presentation::music::MusicPlugin,
         crate::client::input::pointer::PointerPlugin,
         crate::client::presentation::health::HealthPlugin,
         crate::client::presentation::spells::SpellAnimationsPlugin,
+        crate::client::presentation::water_material::WaterPlugin,
         // crate::client::presentation::water_experiment::WaterPlugin,
     ))
     .add_systems(
@@ -165,6 +167,16 @@ pub fn run() {
     app.run();
 }
 
+fn disconnect_on_window_close(
+    close_requests: MessageReader<WindowCloseRequested>,
+    mut transport: ResMut<NetcodeClientTransport>,
+) {
+    if !close_requests.is_empty() {
+        info!("Window close requested; notifying the server before exiting");
+        transport.disconnect();
+    }
+}
+
 fn _debug_current_gamemode_state(state: Res<State<ClientState>>) {
     eprintln!("Current state: {:?}", state.get());
 }
@@ -174,11 +186,20 @@ fn create_renet_transport(app: &mut App) {
     let client = RenetClient::new(connection_config());
     app.insert_resource(client);
 
+    let _ = dotenvy::dotenv();
     let current_time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
 
-    let client_id = current_time.as_millis() as u64;
+    // Temporary development identity until login and character selection are
+    // implemented. Keeping this stable lets the server reload the same database
+    // character after a restart.
+    let client_id = std::env::var("PLAYER_ACCOUNT_ID")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|id| *id > 0)
+        .unwrap_or(1);
+    info!("Using development player account {client_id}");
 
     let server_addr = SocketAddr::new(local_ip().unwrap(), 42069);
 
@@ -313,7 +334,14 @@ fn client_sync_players(
     chaski: Res<ChaskiAssets>,
     pig_assets: Res<PigAssets>,
     seal_assets: Res<SealAssets>,
-    mut entities: Query<(&mut PositionHistory, &mut AuthoritativePosition)>,
+    mut entities: Query<(
+        &mut PositionHistory,
+        &mut AuthoritativePosition,
+        &mut Transform,
+        &mut GameVelocity,
+        Option<&mut PredictedMovement>,
+        Option<&mut KinematicCharacterController>,
+    )>,
 ) {
     let client_id = client_id.0;
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
@@ -321,8 +349,13 @@ fn client_sync_players(
         match server_message {
             ServerMessages::PlayerCreate {
                 id,
+                character_id,
                 translation,
+                facing,
+                health,
+                mana,
                 entity,
+                attack_speed,
                 server_time,
             } => {
                 println!("Player {} connected at translation  {:?}", id, translation);
@@ -340,14 +373,8 @@ fn client_sync_players(
                     Collider::capsule_y(0.5, 0.5),
                     ActiveCollisionTypes::KINEMATIC_STATIC,
                     RigidBody::KinematicPositionBased,
-                    Health {
-                        max: 100,
-                        current: 100,
-                    },
-                    Mana {
-                        max: 100,
-                        current: 100,
-                    },
+                    health,
+                    mana,
                     Animation::Idle,
                     AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
                     //RigidBody::Kinematic,
@@ -356,8 +383,10 @@ fn client_sync_players(
 
                 client_entity.insert((
                     Player { id },
+                    character_id,
+                    AttackSpeed(attack_speed),
                     GameVelocity::default(),
-                    Facing(4),
+                    facing,
                     PositionHistory::new(translation.into(), server_time),
                     AuthoritativePosition::new(translation.into(), server_time),
                 ));
@@ -413,6 +442,41 @@ fn client_sync_players(
                     }
                 }
             }
+            ServerMessages::MovementRejected {
+                entity,
+                translation,
+                server_time,
+            } => {
+                let Some(client_entity) = network_mapping.0.get(&entity) else {
+                    continue;
+                };
+                let Ok((
+                    mut history,
+                    mut authoritative,
+                    mut transform,
+                    mut velocity,
+                    prediction,
+                    controller,
+                )) = entities.get_mut(*client_entity)
+                else {
+                    continue;
+                };
+
+                let position = Vec3::from_array(translation);
+                history.add_absolute_position(position, server_time);
+                authoritative.position = position;
+                authoritative.timestamp = server_time;
+                transform.translation = position;
+                velocity.0 = Vec3::ZERO;
+                if let Some(mut prediction) = prediction {
+                    prediction.destination = None;
+                }
+                if let Some(mut controller) = controller {
+                    controller.translation = None;
+                }
+                commands.entity(*client_entity).insert(Animation::Idle);
+                warn!("Server rejected movement; restored authoritative position");
+            }
             ServerMessages::SpawnProjectile {
                 entity,
                 translation,
@@ -435,6 +499,38 @@ fn client_sync_players(
             ServerMessages::DespawnProjectile { entity } => {
                 if let Some(entity) = network_mapping.0.remove(&entity) {
                     commands.entity(entity).despawn();
+                }
+            }
+            ServerMessages::SpellCastStarted {
+                entity,
+                spell_id,
+                target,
+                cast_time_ms,
+                facing,
+            } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.trigger(ConfirmedSpellCastStarted {
+                        entity: *client_entity,
+                        spell_id,
+                        target,
+                        cast_time: std::time::Duration::from_millis(cast_time_ms.into()),
+                        facing,
+                    });
+                }
+            }
+            ServerMessages::SpellCastCompleted {
+                entity,
+                spell_id,
+                target,
+                cooldown_ms,
+            } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.trigger(ConfirmedSpellCastCompleted {
+                        entity: *client_entity,
+                        spell_id,
+                        target,
+                        cooldown: std::time::Duration::from_millis(cooldown_ms.into()),
+                    });
                 }
             }
             ServerMessages::SpawnMonster {
@@ -627,7 +723,8 @@ fn client_sync_players(
         let Some(client_entity) = network_mapping.0.get(&snapshot.entity) else {
             continue;
         };
-        let Ok((mut history, mut authoritative)) = entities.get_mut(*client_entity) else {
+        let Ok((mut history, mut authoritative, _, _, _, _)) = entities.get_mut(*client_entity)
+        else {
             continue;
         };
 

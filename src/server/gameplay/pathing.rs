@@ -1,10 +1,10 @@
-use crate::server::network::replication::PrevState;
 use crate::shared::constants::*;
 use crate::shared::gameplay::{components::*, entities::MapEntity};
 use crate::world::setup_level;
 use bevy::{camera::primitives::MeshAabb, prelude::*};
 use bevy_rapier3d::prelude::*;
 use pathfinding::prelude::{astar, bfs};
+use std::collections::HashSet;
 
 pub struct PathingPlugin;
 
@@ -13,7 +13,28 @@ pub struct TargetPos {
     pub position: Vec3,
 }
 
-const GROUND_TIMER: f32 = 0.5;
+const WATER_NAV_MIN_CELL: i32 = -150;
+const WATER_NAV_MAX_CELL: i32 = 150;
+const WATER_NAV_COLUMNS_PER_TICK: i32 = 8;
+const WATER_HEIGHT_RAY_ORIGIN: f32 = 128.0;
+const WATER_HEIGHT_RAY_DISTANCE: f32 = 256.0;
+
+#[derive(Resource)]
+struct WaterNavigationBuilder {
+    next_x: i32,
+    started: bool,
+    finished: bool,
+}
+
+impl Default for WaterNavigationBuilder {
+    fn default() -> Self {
+        Self {
+            next_x: WATER_NAV_MIN_CELL,
+            started: false,
+            finished: false,
+        }
+    }
+}
 
 fn stop_walking_system(
     mut removals: RemovedComponents<Walking>,
@@ -33,52 +54,55 @@ fn stop_walking_system(
             if let Some(mut controller) = controller {
                 controller.translation = None;
             }
+            trace!("Entity {:?} stopped walking", entity);
         }
         commands.entity(entity).try_remove::<TargetPos>();
-        eprintln!("Entity {:?} removed walking component", entity);
     }
 }
 
 impl Plugin for PathingPlugin {
     fn build(&self, app: &mut App) {
         // add things to your app here
-        app.add_systems(
-            Startup,
-            (
-                setup_prohibited_areas.after(setup_level),
-                setup_prohibited_cells.after(setup_level),
-                setup_gravity.after(setup_level),
-            ),
-        )
-        /*.add_systems(Update, (
-                get_avian3d_velocity.after(PhysicsSet::Sync),
-                apply_avian3d_velocity_system.after(get_velocity).after(PhysicsSet::Sync),
+        app.init_resource::<WaterNavigationBuilder>()
+            .add_systems(
+                Startup,
+                (
+                    setup_prohibited_areas.after(setup_level),
+                    setup_prohibited_cells.after(setup_level),
+                    setup_gravity.after(setup_level),
+                ),
             )
-        )*/
-        /* .add_systems(
-        FixedUpdate, (
-                get_velocity,
-                apply_velocity_system.after(get_velocity),
-                //.after(PhysicsSet::Writeback)
-                //.after(TransformSystem::TransformPropagate),
-                //read_result_system.after(apply_rapier3d_velocity_system),
-                walking_system
-                //client_velocity.run_if(in_state(AppState::InGame)),
+            .add_systems(
+                FixedUpdate,
+                build_water_navigation.after(PhysicsSet::Writeback),
             )
-        );*/
-        .add_systems(
-            FixedUpdate,
-            (
-                walking_system,
-                stop_walking_system.before(get_velocity),
-                get_velocity
-                    .after(stop_walking_system)
-                    .before(PhysicsSet::StepSimulation),
-                apply_rapier3d_velocity_system
-                    .after(get_velocity)
-                    .before(PhysicsSet::StepSimulation),
-            ),
-        );
+            /*.add_systems(Update, (
+                    get_avian3d_velocity.after(PhysicsSet::Sync),
+                    apply_avian3d_velocity_system.after(get_velocity).after(PhysicsSet::Sync),
+                )
+            )*/
+            /* .add_systems(
+            FixedUpdate, (
+                    get_velocity,
+                    apply_velocity_system.after(get_velocity),
+                    //.after(PhysicsSet::Writeback)
+                    //.after(TransformSystem::TransformPropagate),
+                    //read_result_system.after(apply_rapier3d_velocity_system),
+                    walking_system
+                    //client_velocity.run_if(in_state(AppState::InGame)),
+                )
+            );*/
+            .add_systems(
+                FixedUpdate,
+                (
+                    walking_system,
+                    stop_walking_system,
+                    get_velocity,
+                    apply_rapier3d_velocity_system,
+                )
+                    .chain()
+                    .before(PhysicsSet::SyncBackend),
+            );
 
         fn setup_gravity(mut rapier_config: Query<&mut RapierConfiguration>) {
             if let Ok(mut rapier_config) = rapier_config.single_mut() {
@@ -123,7 +147,7 @@ impl Plugin for PathingPlugin {
                             let pos = Pos(x, z);
                             if !map.blocked_paths.contains(&pos) {
                                 println!("Se agrega {:?} a blocked paths", pos);
-                                map.blocked_paths.push(pos);
+                                map.blocked_paths.insert(pos);
                             }
                         }
                     }
@@ -147,7 +171,7 @@ impl Plugin for PathingPlugin {
         ) {
             for (_entity, mut building) in buildings.iter_mut() {
                 info!("Building {:?}!", building.blocked_paths);
-                map.blocked_paths.append(&mut building.blocked_paths);
+                map.blocked_paths.extend(building.blocked_paths.drain(..));
                 info!("blocked_paths {:?}!", map);
             }
         }
@@ -226,6 +250,93 @@ impl Plugin for PathingPlugin {
     }
 }
 
+fn build_water_navigation(
+    read_rapier_context: ReadRapierContext,
+    map_roots: Query<Entity, With<MapEntity>>,
+    children: Query<&Children>,
+    colliders: Query<(), With<Collider>>,
+    mut map: ResMut<Map>,
+    mut builder: ResMut<WaterNavigationBuilder>,
+) {
+    if builder.finished {
+        return;
+    }
+
+    let Ok(rapier_context) = read_rapier_context.single() else {
+        return;
+    };
+
+    if !builder.started {
+        let terrain_colliders: HashSet<Entity> = map_roots
+            .iter()
+            .flat_map(|root| children.iter_descendants(root))
+            .filter(|entity| colliders.contains(*entity))
+            .collect();
+
+        if terrain_colliders.is_empty() {
+            return;
+        }
+
+        let terrain_is_in_physics_world = [
+            Vec2::ZERO,
+            Vec2::new(75.0, 75.0),
+            Vec2::new(-75.0, -75.0),
+            Vec2::new(75.0, -75.0),
+            Vec2::new(-75.0, 75.0),
+        ]
+        .into_iter()
+        .any(|sample| {
+            rapier_context
+                .cast_ray(
+                    Vec3::new(sample.x, WATER_HEIGHT_RAY_ORIGIN, sample.y),
+                    Vec3::NEG_Y,
+                    WATER_HEIGHT_RAY_DISTANCE,
+                    true,
+                    QueryFilter::only_fixed().exclude_sensors(),
+                )
+                .is_some_and(|(entity, _)| terrain_colliders.contains(&entity))
+        });
+
+        if !terrain_is_in_physics_world {
+            return;
+        }
+        builder.started = true;
+        info!("Building submerged navigation cells");
+    }
+
+    let end_x = (builder.next_x + WATER_NAV_COLUMNS_PER_TICK - 1).min(WATER_NAV_MAX_CELL);
+    for x in builder.next_x..=end_x {
+        for z in WATER_NAV_MIN_CELL..=WATER_NAV_MAX_CELL {
+            let surface_height = rapier_context
+                .cast_ray(
+                    Vec3::new(x as f32, WATER_HEIGHT_RAY_ORIGIN, z as f32),
+                    Vec3::NEG_Y,
+                    WATER_HEIGHT_RAY_DISTANCE,
+                    true,
+                    QueryFilter::only_fixed().exclude_sensors(),
+                )
+                .map(|(_, time_of_impact)| WATER_HEIGHT_RAY_ORIGIN - time_of_impact);
+
+            if surface_is_submerged(surface_height) {
+                map.blocked_paths.insert(Pos(x, z));
+            }
+        }
+    }
+
+    builder.next_x = end_x + 1;
+    if builder.next_x > WATER_NAV_MAX_CELL {
+        builder.finished = true;
+        info!(
+            "Finished water navigation mask with {} total blocked cells",
+            map.blocked_paths.len()
+        );
+    }
+}
+
+fn surface_is_submerged(surface_height: Option<f32>) -> bool {
+    surface_height.is_none_or(|height| height < WATER_LEVEL)
+}
+
 /*pub fn apply_avian3d_velocity_system(mut query: Query<(&mut LinearVelocity, &mut Transform, &TargetPos)>, time: Res<Time>) {
     for (mut linear_velocity, mut transform, target_pos) in query.iter_mut() {
 
@@ -273,25 +384,18 @@ pub fn get_velocity(mut query: Query<(&mut Transform, &mut TargetPos, &mut GameV
 pub fn apply_rapier3d_velocity_system(
     mut query: Query<(
         &GameVelocity,
-        &mut Transform,
-        &mut PrevState,
+        &Transform,
         &TargetPos,
         &mut KinematicCharacterController,
         Option<&KinematicCharacterControllerOutput>,
     )>,
     time: Res<Time>,
-    mut grounded_timer: Local<f32>,
 ) {
-    for (velocity, mut transform, prev_state, target_pos, mut controller, output) in
-        query.iter_mut()
-    {
+    for (velocity, transform, target_pos, mut controller, output) in query.iter_mut() {
         let mut movement = Vec3::default();
         let delta_time = time.delta_secs();
 
-        if output.map(|o| o.grounded).unwrap_or(false) {
-            //info!("Esta en el piso !");
-            *grounded_timer = GROUND_TIMER;
-        } else {
+        if !output.map(|o| o.grounded).unwrap_or(false) {
             movement.y += CHARACTER_GRAVITY * delta_time * controller.custom_mass.unwrap_or(1.0);
         }
 
@@ -340,12 +444,12 @@ pub fn apply_rapier3d_velocity_system(
                 *grounded_timer -= delta_time;
             }
             movement.y += GRAVITY * delta_time * controller.custom_mass.unwrap_or(1.0);*/
-
-            controller.translation = Some(movement);
-        } else if (controller.translation != None) {
-            controller.translation = None;
         }
-        //transform.translation += velocity.0 * time.delta_secs();
+
+        // Always run the character controller, even while idle. This lets a
+        // freshly loaded character settle onto the terrain instead of remaining
+        // suspended or intersecting the map until the first accepted path.
+        controller.translation = Some(movement);
     }
 }
 
@@ -532,6 +636,172 @@ pub fn calculate_velocity(origin: Vec3, destination: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_rapier_schedule_updates_the_authoritative_transform() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule(),
+        ))
+        .init_resource::<Assets<Mesh>>()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        ))
+        .insert_resource(TimestepMode::Fixed {
+            dt: 1.0 / 60.0,
+            substeps: 1,
+        })
+        .add_systems(
+            FixedUpdate,
+            (get_velocity, apply_rapier3d_velocity_system)
+                .chain()
+                .before(PhysicsSet::SyncBackend),
+        );
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                RigidBody::KinematicPositionBased,
+                Collider::capsule_y(0.5, 0.5),
+                KinematicCharacterController::default(),
+                GameVelocity::default(),
+                TargetPos {
+                    position: Vec3::new(2.0, 1.0, 0.0),
+                },
+            ))
+            .id();
+
+        for _ in 0..10 {
+            app.update();
+        }
+
+        assert!(
+            app.world()
+                .entity(entity)
+                .get::<Transform>()
+                .unwrap()
+                .translation
+                .x
+                > 0.0
+        );
+    }
+
+    #[test]
+    fn real_server_player_bundle_walks_along_its_path() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            PathingPlugin,
+            RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule(),
+        ))
+        .init_resource::<Assets<Mesh>>()
+        .insert_resource(Map::default())
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        ))
+        .insert_resource(TimestepMode::Fixed {
+            dt: 1.0 / 60.0,
+            substeps: 1,
+        });
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                LockedAxes::ROTATION_LOCKED,
+                Collider::capsule_y(0.5, 0.5),
+                ActiveCollisionTypes::KINEMATIC_STATIC,
+                RigidBody::KinematicPositionBased,
+                TransformInterpolation::default(),
+                player_character_controller(),
+                GravityScale(1.0),
+                GameVelocity::default(),
+                Facing(0),
+                TargetPos {
+                    position: Vec3::new(0.0, 1.0, 0.0),
+                },
+                Walking {
+                    target_translation: Vec3::new(2.0, 1.0, 0.0),
+                    path: Some((vec![Pos(0, 0), Pos(1, 0), Pos(2, 0)], 2)),
+                },
+            ))
+            .id();
+
+        for _ in 0..10 {
+            app.update();
+        }
+
+        assert!(
+            app.world()
+                .entity(entity)
+                .get::<Transform>()
+                .unwrap()
+                .translation
+                .x
+                > 0.0
+        );
+    }
+
+    #[test]
+    fn idle_server_player_settles_vertically() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule(),
+        ))
+        .init_resource::<Assets<Mesh>>()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        ))
+        .insert_resource(TimestepMode::Fixed {
+            dt: 1.0 / 60.0,
+            substeps: 1,
+        })
+        .add_systems(
+            FixedUpdate,
+            apply_rapier3d_velocity_system.before(PhysicsSet::SyncBackend),
+        );
+
+        let spawn = Vec3::new(-10.0, 5.0, 0.0);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(spawn),
+                RigidBody::KinematicPositionBased,
+                Collider::capsule_y(0.5, 0.5),
+                player_character_controller(),
+                GameVelocity::default(),
+                TargetPos { position: spawn },
+            ))
+            .id();
+
+        for _ in 0..10 {
+            app.update();
+        }
+
+        assert!(
+            app.world()
+                .entity(entity)
+                .get::<Transform>()
+                .unwrap()
+                .translation
+                .y
+                < spawn.y
+        );
+    }
+
+    #[test]
+    fn navigation_blocks_submerged_and_outside_map_cells() {
+        assert!(surface_is_submerged(Some(WATER_LEVEL - 0.01)));
+        assert!(surface_is_submerged(None));
+        assert!(!surface_is_submerged(Some(WATER_LEVEL)));
+        assert!(!surface_is_submerged(Some(WATER_LEVEL + 1.0)));
+    }
 
     #[test]
     fn walking_cleanup_ignores_an_entity_that_was_despawned() {

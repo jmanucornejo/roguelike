@@ -9,8 +9,9 @@ use bevy_asset_loader::prelude::*;
 
 use crate::client::network::movement::{PositionHistory, PredictedMovement, PredictionInputSet};
 use crate::client::presentation::action_bar::ActionBarState;
-use crate::client::presentation::spells::CastSpell;
+use crate::client::presentation::casting::{CastingSpell, RequestSpellCast};
 use crate::client::state::*;
+use crate::shared::constants::WATER_LEVEL;
 use crate::shared::gameplay::components::*;
 use crate::shared::gameplay::entities::{Player, NPC};
 use crate::shared::network::messages::*;
@@ -659,16 +660,22 @@ impl Plugin for PointerPlugin {
             >,
             mut cursors: Query<&mut GameCursor>,
             mut network_mapping: ResMut<NetworkMapping>,
+            casting_players: Query<(), (With<ControlledPlayer>, With<CastingSpell>)>,
             //interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
         ) {
-            player_input.left =
-                keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft);
-            player_input.right = keyboard_input.pressed(KeyCode::KeyD)
-                || keyboard_input.pressed(KeyCode::ArrowRight);
-            player_input.up =
-                keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp);
-            player_input.down =
-                keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown);
+            let movement_locked = !casting_players.is_empty();
+            if movement_locked {
+                **player_input = PlayerInput::default();
+            } else {
+                player_input.left = keyboard_input.pressed(KeyCode::KeyA)
+                    || keyboard_input.pressed(KeyCode::ArrowLeft);
+                player_input.right = keyboard_input.pressed(KeyCode::KeyD)
+                    || keyboard_input.pressed(KeyCode::ArrowRight);
+                player_input.up = keyboard_input.pressed(KeyCode::KeyW)
+                    || keyboard_input.pressed(KeyCode::ArrowUp);
+                player_input.down = keyboard_input.pressed(KeyCode::KeyS)
+                    || keyboard_input.pressed(KeyCode::ArrowDown);
+            }
 
             let selected_spell = if keyboard_input.just_pressed(KeyCode::F1) {
                 Some(1)
@@ -700,6 +707,9 @@ impl Plugin for PointerPlugin {
                 if pointer_over_action_bar {
                     return;
                 }
+                if movement_locked {
+                    return;
+                }
 
                 if let Ok(mut cursor) = cursors.single_mut() {
                     match cursor.action {
@@ -709,6 +719,11 @@ impl Plugin for PointerPlugin {
                                 Ok((player_entity, prediction, history, mut animation)),
                             ) = (target_query.single(), player_entities.single_mut())
                             {
+                                if target_position.0.y < WATER_LEVEL {
+                                    info!("Ignoring movement into submerged terrain");
+                                    return;
+                                }
+
                                 let mut move_translation = target_position.0;
                                 move_translation.x = move_translation.x.round();
                                 move_translation.z = move_translation.z.round();
@@ -764,7 +779,7 @@ impl Plugin for PointerPlugin {
                         }
                         CursorKind::Cast { spell_id } => {
                             if let Ok(target_position) = target_query.single() {
-                                commands.trigger(CastSpell {
+                                commands.trigger(RequestSpellCast {
                                     spell_id,
                                     translation: target_position.0,
                                 });
