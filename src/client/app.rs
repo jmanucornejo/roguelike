@@ -10,6 +10,7 @@ use crate::client::presentation::casting::{
     ConfirmedSpellCastCompleted, ConfirmedSpellCastStarted,
 };
 use crate::client::presentation::damage_numbers::{DamageNumberEvent, DamageNumbersPlugin};
+use crate::client::presentation::inventory::{falling_ground_item, item_color};
 use crate::client::state::*;
 use crate::shared::constants::*;
 use crate::shared::gameplay::components::*;
@@ -21,7 +22,7 @@ use bevy_egui::EguiPlugin;
 use bevy_obj::ObjPlugin;
 use bevy_sprite3d::prelude::*;
 use local_ip_address::local_ip;
-use std::ops::Mul;
+use std::{collections::HashSet, ops::Mul};
 
 use crate::client::presentation::health_bars::{BarHeight, BarSettings};
 
@@ -57,6 +58,9 @@ use bevy_rapier3d::prelude::*;
 
 #[derive(Component)]
 struct Hovered;
+
+#[derive(Default, Resource)]
+struct PresentedGroundItems(HashSet<Entity>);
 
 #[derive(Component)]
 struct AtmosphereSun;
@@ -111,6 +115,7 @@ pub fn run() {
     .add_plugins(RapierDebugRenderPlugin { ..default() })
     .insert_resource(Map::default())
     .insert_resource(NetworkMapping::default())
+    .insert_resource(PresentedGroundItems::default())
     .add_message::<PlayerCommand>()
     .add_plugins(NetcodeClientPlugin)
     .add_systems(
@@ -126,6 +131,8 @@ pub fn run() {
         crate::client::presentation::animations::AnimationsPlugin,
         crate::client::presentation::casting::CastingPlugin,
         DamageNumbersPlugin,
+        crate::client::presentation::inventory::InventoryPlugin,
+        crate::client::presentation::progression_hud::ProgressionHudPlugin,
         ClientClockSyncPlugin,
         // crate::client::presentation::music::MusicPlugin,
         crate::client::input::pointer::PointerPlugin,
@@ -330,6 +337,7 @@ fn client_sync_players(
     client_id: Res<CurrentClientId>,
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
+    mut presented_ground_items: ResMut<PresentedGroundItems>,
     assets: Res<MyAssets>,
     chaski: Res<ChaskiAssets>,
     pig_assets: Res<PigAssets>,
@@ -354,6 +362,7 @@ fn client_sync_players(
                 facing,
                 health,
                 mana,
+                progression,
                 entity,
                 attack_speed,
                 server_time,
@@ -375,6 +384,7 @@ fn client_sync_players(
                     RigidBody::KinematicPositionBased,
                     health,
                     mana,
+                    progression,
                     Animation::Idle,
                     AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
                     //RigidBody::Kinematic,
@@ -496,6 +506,38 @@ fn client_sync_players(
                 }*/
                 network_mapping.0.insert(entity, projectile_entity.id());
             }
+            ServerMessages::SpawnGroundItem {
+                entity,
+                item,
+                translation,
+            } => {
+                let landing = Vec3::from_array(translation);
+                let first_presentation = presented_ground_items.0.insert(entity);
+                let (transform, drop_animation) = if first_presentation {
+                    let (transform, animation) = falling_ground_item(landing);
+                    (transform, Some(animation))
+                } else {
+                    (Transform::from_translation(landing), None)
+                };
+                let mut client_item = commands.spawn((
+                    Mesh3d(meshes.add(Cuboid::new(0.42, 0.12, 0.42))),
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: item_color(item.item_id),
+                        emissive: LinearRgba::from(item_color(item.item_id)) * 0.35,
+                        ..default()
+                    })),
+                    transform,
+                    Collider::cuboid(0.21, 0.06, 0.21),
+                    RigidBody::KinematicPositionBased,
+                    item,
+                    Name::new("Ground item placeholder"),
+                ));
+                if let Some(drop_animation) = drop_animation {
+                    client_item.insert(drop_animation);
+                }
+                let client_entity = client_item.id();
+                network_mapping.0.insert(entity, client_entity);
+            }
             ServerMessages::DespawnProjectile { entity } => {
                 if let Some(entity) = network_mapping.0.remove(&entity) {
                     commands.entity(entity).despawn();
@@ -592,6 +634,15 @@ fn client_sync_players(
                 health,
                 server_time,
             } => {
+                let (placeholder_color, monster_name) = match sprite_id.0 {
+                    AGGRESSIVE_MONSTER_PLACEHOLDER_SPRITE => {
+                        (Color::srgb(1.0, 0.32, 0.25), "Aggressive Pig")
+                    }
+                    SPELL_REACTIVE_MONSTER_PLACEHOLDER_SPRITE => {
+                        (Color::srgb(0.48, 0.38, 1.0), "Spell-Reactive Pig")
+                    }
+                    _ => (Color::WHITE, "Pig"),
+                };
                 let texture_atlas: TextureAtlas = TextureAtlas {
                     layout: seal_assets.layout.clone(),
                     index: 58,
@@ -608,6 +659,7 @@ fn client_sync_players(
                     Sprite {
                         image: seal_assets.sprite.clone(),
                         texture_atlas: Some(texture_atlas.clone()),
+                        color: placeholder_color,
                         ..default()
                     },
                     Transform::from_translation(translation.into()),
@@ -626,7 +678,7 @@ fn client_sync_players(
                         hp: 100,
                         kind: MonsterKind::Pig,
                     },
-                    Name::new("Monster"),
+                    Name::new(monster_name),
                 ));
 
                 println!("PIG SPAWNED AT  {:?} ", translation);
@@ -672,6 +724,19 @@ fn client_sync_players(
                     commands
                         .entity(*client_entity)
                         .insert(Health { max, current });
+                }
+            }
+            ServerMessages::ProgressionChanged {
+                entity,
+                progression,
+            } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.entity(*client_entity).insert(progression);
+                }
+            }
+            ServerMessages::InventoryUpdated { entity, inventory } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.entity(*client_entity).insert(inventory);
                 }
             }
             ServerMessages::DamageNumber { entity, amount } => {

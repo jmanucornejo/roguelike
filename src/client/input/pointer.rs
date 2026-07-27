@@ -10,10 +10,13 @@ use bevy_asset_loader::prelude::*;
 use crate::client::network::movement::{PositionHistory, PredictedMovement, PredictionInputSet};
 use crate::client::presentation::action_bar::ActionBarState;
 use crate::client::presentation::casting::{CastingSpell, RequestSpellCast};
+use crate::client::presentation::inventory::InventoryUiState;
 use crate::client::state::*;
 use crate::shared::constants::WATER_LEVEL;
 use crate::shared::gameplay::components::*;
 use crate::shared::gameplay::entities::{Player, NPC};
+use crate::shared::gameplay::items::{item_definition, GroundItem};
+use crate::shared::gameplay::spells::{spell_definition, SpellTargeting};
 use crate::shared::network::messages::*;
 use crate::shared::states::ClientState;
 use bevy::pbr::ExtendedMaterial;
@@ -46,10 +49,14 @@ struct GameCursor {
     hovered_entity: Option<Entity>,
 }
 
+#[derive(Component)]
+struct GroundItemTooltip;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum CursorKind {
     Default,
     Attack,
+    Pickup,
     Cast { spell_id: u16 },
 }
 
@@ -94,7 +101,10 @@ impl Plugin for PointerPlugin {
             LoadingState::new(ClientState::Setup).load_collection::<GridTarget>(),
         )
         //.add_plugins((DecalPlugin))
-        .add_systems(OnEnter(ClientState::InGame), (setup_cursor))
+        .add_systems(
+            OnEnter(ClientState::InGame),
+            (setup_cursor, setup_ground_item_tooltip),
+        )
         .add_systems(
             OnEnter(ClientState::InGame),
             (
@@ -107,6 +117,7 @@ impl Plugin for PointerPlugin {
             Update,
             (
                 move_cursor.run_if(in_state(ClientState::InGame)),
+                update_ground_item_tooltip.run_if(in_state(ClientState::InGame)),
                 player_input
                     .run_if(in_state(ClientState::InGame))
                     .in_set(PredictionInputSet),
@@ -122,6 +133,72 @@ impl Plugin for PointerPlugin {
                     .after(setup_cursor),
             ),
         );
+
+        fn setup_ground_item_tooltip(mut commands: Commands) {
+            commands.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                TextShadow {
+                    offset: Vec2::new(1.0, 1.0),
+                    color: Color::BLACK,
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.025, 0.03, 0.045, 0.94)),
+                BorderColor::all(Color::srgba(0.72, 0.75, 0.82, 0.95)),
+                GlobalZIndex(999),
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                GroundItemTooltip,
+                Name::new("Ground item tooltip"),
+            ));
+        }
+
+        fn update_ground_item_tooltip(
+            primary_window: Query<&Window, With<PrimaryWindow>>,
+            cursors: Query<&GameCursor>,
+            ground_items: Query<&GroundItem>,
+            mut tooltips: Query<(&mut Text, &mut Node, &mut Visibility), With<GroundItemTooltip>>,
+        ) {
+            let (Ok(window), Ok(cursor), Ok((mut text, mut node, mut visibility))) = (
+                primary_window.single(),
+                cursors.single(),
+                tooltips.single_mut(),
+            ) else {
+                return;
+            };
+
+            let Some((item, definition)) = cursor
+                .hovered_entity
+                .and_then(|entity| ground_items.get(entity).ok())
+                .and_then(|item| {
+                    item_definition(item.item_id).map(|definition| (item, definition))
+                })
+            else {
+                *visibility = Visibility::Hidden;
+                return;
+            };
+
+            text.0 = if item.quantity > 1 {
+                format!("{} x{}", definition.name, item.quantity)
+            } else {
+                definition.name.to_string()
+            };
+            if let Some(pointer) = window.cursor_position() {
+                node.left = Val::Px((pointer.x + 18.0).min(window.width() - 120.0));
+                node.top = Val::Px((pointer.y + 18.0).min(window.height() - 30.0));
+            }
+            *visibility = Visibility::Inherited;
+        }
 
         fn calculate_initial_decal_transform(
             start: Vec3,
@@ -336,7 +413,10 @@ impl Plugin for PointerPlugin {
             camera_query: Query<(&Camera, &GlobalTransform)>,
             read_rapier_context: ReadRapierContext,
             //rapier_context: Res<RapierContext>,
-            interactive_entities: Query<(Entity), (Or<(With<Player>, With<NPC>, With<Monster>)>)>,
+            interactive_entities: Query<
+                (Entity, Option<&GroundItem>, Option<&Monster>),
+                Or<(With<Player>, With<NPC>, With<Monster>, With<GroundItem>)>,
+            >,
             mut cursor: Query<&mut GameCursor>,
         ) {
             if let (
@@ -403,19 +483,35 @@ impl Plugin for PointerPlugin {
                             QueryFilter::default(),
                         ) {
                             if let Ok(mut game_cursor) = cursor.single_mut() {
-                                if matches!(game_cursor.action, CursorKind::Cast { .. }) {
-                                    if game_cursor.hovered_entity.is_some() {
-                                        game_cursor.hovered_entity = None;
+                                if let CursorKind::Cast { spell_id } = game_cursor.action {
+                                    let direct_monster_spell = spell_definition(spell_id)
+                                        .is_some_and(|definition| {
+                                            definition.targeting == SpellTargeting::DirectMonster
+                                        });
+                                    let hovered_monster = interactive_entities
+                                        .get(entity)
+                                        .ok()
+                                        .and_then(|(interactive_entity, _, monster)| {
+                                            (direct_monster_spell && monster.is_some())
+                                                .then_some(interactive_entity)
+                                        });
+                                    if game_cursor.hovered_entity != hovered_monster {
+                                        game_cursor.hovered_entity = hovered_monster;
                                     }
-                                } else if let Ok((interactive_entity)) =
+                                } else if let Ok((interactive_entity, ground_item, _)) =
                                     interactive_entities.get(entity)
                                 {
                                     if (Some(interactive_entity) != game_cursor.hovered_entity) {
                                         game_cursor.hovered_entity = Some(interactive_entity);
                                     }
 
-                                    if (game_cursor.action != CursorKind::Attack) {
-                                        game_cursor.action = CursorKind::Attack;
+                                    let action = if ground_item.is_some() {
+                                        CursorKind::Pickup
+                                    } else {
+                                        CursorKind::Attack
+                                    };
+                                    if game_cursor.action != action {
+                                        game_cursor.action = action;
                                     }
                                 } else {
                                     // println!("No le dimos a nada.Frist hit {:?}", first_hit.entity);
@@ -568,6 +664,9 @@ impl Plugin for PointerPlugin {
                     CursorKind::Attack => {
                         img.image = asset_server.load("cursors/PNG/05.png").into()
                     }
+                    CursorKind::Pickup => {
+                        img.image = asset_server.load("cursors/PNG/03.png").into()
+                    }
                     CursorKind::Cast { spell_id } => {
                         let cursor_path = match spell_id {
                             1 => "cursors/PNG/11.png",
@@ -647,6 +746,7 @@ impl Plugin for PointerPlugin {
             mouse_button_input: Res<ButtonInput<MouseButton>>,
             primary_window: Query<&Window, With<PrimaryWindow>>,
             action_bar: Option<Res<ActionBarState>>,
+            inventory_ui: Option<Res<InventoryUiState>>,
             target_query: Query<&CursorMapPosition, With<Target>>,
             mut player_commands: MessageWriter<PlayerCommand>,
             mut player_entities: Query<
@@ -661,6 +761,7 @@ impl Plugin for PointerPlugin {
             mut cursors: Query<&mut GameCursor>,
             mut network_mapping: ResMut<NetworkMapping>,
             casting_players: Query<(), (With<ControlledPlayer>, With<CastingSpell>)>,
+            spell_targets: Query<&Transform, With<Monster>>,
             //interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
         ) {
             let movement_locked = !casting_players.is_empty();
@@ -694,17 +795,38 @@ impl Plugin for PointerPlugin {
                 }
             }
 
+            if mouse_button_input.just_pressed(MouseButton::Right) {
+                if let Ok(mut cursor) = cursors.single_mut() {
+                    if matches!(cursor.action, CursorKind::Cast { .. }) {
+                        cursor.action = CursorKind::Default;
+                        cursor.hovered_entity = None;
+                        info!("Cancelled pending spell target selection");
+                        return;
+                    }
+                }
+            }
+
             if mouse_button_input.just_pressed(MouseButton::Left) {
-                let pointer_over_action_bar = primary_window
+                let pointer_over_ui = primary_window
                     .single()
                     .ok()
-                    .and_then(Window::cursor_position)
-                    .is_some_and(|pointer_position| {
+                    .and_then(|window| {
+                        window
+                            .cursor_position()
+                            .map(|pointer_position| (window, pointer_position))
+                    })
+                    .is_some_and(|(window, pointer_position)| {
                         action_bar
                             .as_deref()
                             .is_some_and(|bar| bar.captures_pointer(pointer_position))
+                            || inventory_ui.as_deref().is_some_and(|inventory| {
+                                inventory.captures_pointer(
+                                    pointer_position,
+                                    Vec2::new(window.width(), window.height()),
+                                )
+                            })
                     });
-                if pointer_over_action_bar {
+                if pointer_over_ui {
                     return;
                 }
                 if movement_locked {
@@ -777,11 +899,56 @@ impl Plugin for PointerPlugin {
                                 }
                             }
                         }
+                        CursorKind::Pickup => {
+                            if let Some(hovered_entity) = cursor.hovered_entity {
+                                let server_entity =
+                                    network_mapping.0.iter().find_map(|(key, &value)| {
+                                        (value == hovered_entity).then_some(*key)
+                                    });
+                                if let Some(entity) = server_entity {
+                                    player_commands.write(PlayerCommand::PickupItem { entity });
+                                }
+                            }
+                        }
                         CursorKind::Cast { spell_id } => {
+                            let Some(definition) = spell_definition(spell_id) else {
+                                cursor.action = CursorKind::Default;
+                                cursor.hovered_entity = None;
+                                return;
+                            };
+                            let direct_target = match definition.targeting {
+                                SpellTargeting::Ground => None,
+                                SpellTargeting::DirectMonster => {
+                                    let Some(client_entity) = cursor.hovered_entity else {
+                                        info!("Spell {spell_id} requires a monster target");
+                                        return;
+                                    };
+                                    let Some(server_entity) =
+                                        network_mapping.0.iter().find_map(|(server, &client)| {
+                                            (client == client_entity).then_some(*server)
+                                        })
+                                    else {
+                                        warn!("Selected spell target has no server entity mapping");
+                                        return;
+                                    };
+                                    Some((server_entity, client_entity))
+                                }
+                            };
+
                             if let Ok(target_position) = target_query.single() {
+                                let translation = direct_target
+                                    .and_then(|(_, client_entity)| {
+                                        spell_targets
+                                            .get(client_entity)
+                                            .ok()
+                                            .map(|transform| transform.translation)
+                                    })
+                                    .unwrap_or(target_position.0);
                                 commands.trigger(RequestSpellCast {
                                     spell_id,
-                                    translation: target_position.0,
+                                    translation,
+                                    target_entity: direct_target
+                                        .map(|(server_entity, _)| server_entity),
                                 });
                                 cursor.action = CursorKind::Default;
                                 cursor.hovered_entity = None;

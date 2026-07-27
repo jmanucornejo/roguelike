@@ -6,7 +6,10 @@ use super::{
     models::{AccountId, CharacterRecord, CharacterSnapshot, CharacterSummary, NewCharacter},
     repository::CharacterRepository,
 };
-use crate::shared::gameplay::components::CharacterId;
+use crate::shared::gameplay::{
+    components::CharacterId,
+    items::{Inventory, ItemDefinitionId},
+};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -35,6 +38,18 @@ pub enum PersistenceRequest {
         request_id: PersistenceRequestId,
         snapshot: CharacterSnapshot,
     },
+    AddInventoryItem {
+        request_id: PersistenceRequestId,
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+        quantity: u32,
+    },
+    RemoveInventoryItem {
+        request_id: PersistenceRequestId,
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+        quantity: u32,
+    },
     Shutdown,
 }
 
@@ -52,11 +67,24 @@ pub enum PersistenceResponse {
     CharacterLoaded {
         request_id: PersistenceRequestId,
         character: Option<CharacterRecord>,
+        inventory: Inventory,
     },
     CharacterSaved {
         request_id: PersistenceRequestId,
         character_id: CharacterId,
         revision: u64,
+    },
+    InventoryItemAdded {
+        request_id: PersistenceRequestId,
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+        quantity: u32,
+    },
+    InventoryItemRemoved {
+        request_id: PersistenceRequestId,
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+        quantity: u32,
     },
     RequestFailed {
         request_id: Option<PersistenceRequestId>,
@@ -211,9 +239,13 @@ async fn run_database_loop(
                 .load_or_create_default_character(account_id)
                 .await
             {
-                Ok(character) => PersistenceResponse::CharacterLoaded {
-                    request_id,
-                    character: Some(character),
+                Ok(character) => match repository.load_inventory(CharacterId(character.id)).await {
+                    Ok(inventory) => PersistenceResponse::CharacterLoaded {
+                        request_id,
+                        character: Some(character),
+                        inventory,
+                    },
+                    Err(error) => request_failed(request_id, "load inventory", error),
                 },
                 Err(error) => request_failed(request_id, "load or create default character", error),
             },
@@ -222,10 +254,27 @@ async fn run_database_loop(
                 account_id,
                 character_id,
             } => match repository.load_character(account_id, character_id).await {
-                Ok(character) => PersistenceResponse::CharacterLoaded {
-                    request_id,
-                    character,
-                },
+                Ok(character) => {
+                    let inventory = if character.is_some() {
+                        match repository.load_inventory(character_id).await {
+                            Ok(inventory) => inventory,
+                            Err(error) => {
+                                let response = request_failed(request_id, "load inventory", error);
+                                if responses.send(response).is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    } else {
+                        Inventory::default()
+                    };
+                    PersistenceResponse::CharacterLoaded {
+                        request_id,
+                        character,
+                        inventory,
+                    }
+                }
                 Err(error) => request_failed(request_id, "load character", error),
             },
             PersistenceRequest::SaveCharacter {
@@ -242,6 +291,40 @@ async fn run_database_loop(
                     Err(error) => request_failed(request_id, "save character", error),
                 }
             }
+            PersistenceRequest::AddInventoryItem {
+                request_id,
+                character_id,
+                item_id,
+                quantity,
+            } => match repository
+                .add_inventory_item(character_id, item_id, quantity)
+                .await
+            {
+                Ok(quantity) => PersistenceResponse::InventoryItemAdded {
+                    request_id,
+                    character_id,
+                    item_id,
+                    quantity,
+                },
+                Err(error) => request_failed(request_id, "add inventory item", error),
+            },
+            PersistenceRequest::RemoveInventoryItem {
+                request_id,
+                character_id,
+                item_id,
+                quantity,
+            } => match repository
+                .remove_inventory_item(character_id, item_id, quantity)
+                .await
+            {
+                Ok(quantity) => PersistenceResponse::InventoryItemRemoved {
+                    request_id,
+                    character_id,
+                    item_id,
+                    quantity,
+                },
+                Err(error) => request_failed(request_id, "remove inventory item", error),
+            },
             PersistenceRequest::Shutdown => break,
         };
 

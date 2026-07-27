@@ -1,6 +1,8 @@
 use crate::shared::gameplay::components::{
     CharacterId, Facing, Health, Mana, MonsterKind, SpriteId,
 };
+use crate::shared::gameplay::items::{GroundItem, Inventory};
+use crate::shared::gameplay::progression::BaseProgression;
 use bevy::prelude::*;
 use bevy_renet::renet::ClientId;
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,7 @@ pub enum ServerMessages {
         facing: Facing,
         health: Health,
         mana: Mana,
+        progression: BaseProgression,
         attack_speed: f32,
         server_time: u128,
     },
@@ -75,6 +78,19 @@ pub enum ServerMessages {
         amount: i32,
         max: u32,
         current: u32,
+    },
+    ProgressionChanged {
+        entity: Entity,
+        progression: BaseProgression,
+    },
+    SpawnGroundItem {
+        entity: Entity,
+        item: GroundItem,
+        translation: [f32; 3],
+    },
+    InventoryUpdated {
+        entity: Entity,
+        inventory: Inventory,
     },
     DamageNumber {
         entity: Entity,
@@ -127,8 +143,22 @@ pub struct EntitySnapshot {
 
 #[derive(Debug, Serialize, Deserialize, Message)]
 pub enum PlayerCommand {
-    Move { destination_at: Vec3 },
+    Move {
+        destination_at: Vec3,
+    },
     StopMoving,
-    BasicAttack { entity: Entity },
-    Cast { spell_id: u16, cast_at: Vec3 },
+    BasicAttack {
+        entity: Entity,
+    },
+    PickupItem {
+        entity: Entity,
+    },
+    UseItem {
+        item_id: crate::shared::gameplay::items::ItemDefinitionId,
+    },
+    Cast {
+        spell_id: u16,
+        cast_at: Vec3,
+        target_entity: Option<Entity>,
+    },
 }

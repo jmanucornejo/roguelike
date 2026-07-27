@@ -1,4 +1,5 @@
 pub mod combat;
+pub mod items;
 pub mod monsters;
 pub mod pathing;
 pub mod physics;

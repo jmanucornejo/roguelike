@@ -18,6 +18,7 @@ const WATER_NAV_MAX_CELL: i32 = 150;
 const WATER_NAV_COLUMNS_PER_TICK: i32 = 8;
 const WATER_HEIGHT_RAY_ORIGIN: f32 = 128.0;
 const WATER_HEIGHT_RAY_DISTANCE: f32 = 256.0;
+const WAYPOINT_REACHED_DISTANCE: f32 = 0.05;
 
 #[derive(Resource)]
 struct WaterNavigationBuilder {
@@ -177,54 +178,52 @@ impl Plugin for PathingPlugin {
         }
 
         pub fn walking_system(
-            mut walking_entities: Query<(Entity, &Transform, &Walking)>,
+            mut walking_entities: Query<(Entity, &Transform, &mut Walking)>,
             mut commands: Commands,
             //map: Res<Map>
         ) {
-            for (entity, transform, walking) in walking_entities.iter_mut() {
+            for (entity, transform, mut walking) in walking_entities.iter_mut() {
                 /*info!("1. Ta parado en: {:?},  {:?}", Pos(
                     transform.translation.x.round() as i32,
                     transform.translation.z.round() as i32
                 ),  transform.translation);
                 info!("2. Ta lejos. Acercarse!, path: {:?}", walking.path);*/
 
-                if let Some((steps_vec, steps_left)) = walking.path.clone() {
-                    if (walking.target_translation.x == transform.translation.x
-                        && walking.target_translation.z as f32 == transform.translation.z)
+                let Some((steps, next_waypoint)) = walking.path.as_mut() else {
+                    continue;
+                };
+                if steps.len() <= 1 {
+                    commands.entity(entity).try_remove::<Walking>();
+                    continue;
+                }
+
+                // A* includes the current cell as path[0]. Begin with path[1],
+                // then advance only after reaching a waypoint instead of when
+                // rounding happens to enter its cell.
+                if *next_waypoint == 0 {
+                    *next_waypoint = 1;
+                }
+                let mut waypoint_index = *next_waypoint as usize;
+                if let Some(waypoint) = steps.get(waypoint_index) {
+                    let offset = Vec2::new(
+                        transform.translation.x - waypoint.0 as f32,
+                        transform.translation.z - waypoint.1 as f32,
+                    );
+                    if offset.length_squared()
+                        <= WAYPOINT_REACHED_DISTANCE * WAYPOINT_REACHED_DISTANCE
                     {
-                        info!("Se llegó al final, parar de caminar");
-                        commands.entity(entity).remove::<Walking>();
-                    }
-
-                    let current_cell_index: Option<usize> = steps_vec.iter().position(|&r| {
-                        r == Pos(
-                            transform.translation.x.round() as i32,
-                            transform.translation.z.round() as i32,
-                        )
-                    });
-
-                    //info!("3. current_cell_index: {:?}", current_cell_index);
-                    if let Some(current_index) = current_cell_index {
-                        let target_cell_index: usize = steps_left
-                            .try_into()
-                            .expect("No se puedo cambiar de 32 bit a lo necesario");
-
-                        // Aún no llega al mínimo requerido para validar ataque.
-                        if (current_index < target_cell_index) {
-                            if let Some(next_pos) = steps_vec.get(current_index + 1) {
-                                //info!("4. Final Pos: {:?}!", next_pos);
-                                // Se cambia el punto objetivo.
-                                commands.entity(entity).insert(TargetPos {
-                                    position: Vec3 {
-                                        x: next_pos.0 as f32,
-                                        y: 2.0,
-                                        z: next_pos.1 as f32,
-                                    },
-                                });
-                            }
-                        }
+                        waypoint_index += 1;
+                        *next_waypoint = u32::try_from(waypoint_index).unwrap_or(u32::MAX);
                     }
                 }
+
+                let Some(next) = steps.get(waypoint_index) else {
+                    commands.entity(entity).try_remove::<Walking>();
+                    continue;
+                };
+                commands.entity(entity).try_insert(TargetPos {
+                    position: Vec3::new(next.0 as f32, transform.translation.y, next.1 as f32),
+                });
             }
         }
 
@@ -500,7 +499,7 @@ fn read_result_system(controllers: Query<(Entity, &KinematicCharacterControllerO
 }*/
 
 #[allow(unused_parens)]
-pub fn get_astar_successors(current_pos: &Pos, map: &Res<Map>) -> Vec<(Pos, u32)> {
+pub fn get_astar_successors(current_pos: &Pos, map: &Map) -> Vec<(Pos, u32)> {
     let &Pos(x, z) = current_pos;
 
     let blocked_paths = &map.blocked_paths;
@@ -577,7 +576,7 @@ pub fn get_astar_successors(current_pos: &Pos, map: &Res<Map>) -> Vec<(Pos, u32)
 pub fn get_path_between_translations(
     origin_translation: Vec3,
     destination_translation: Vec3,
-    map: &Res<Map>,
+    map: &Map,
 ) -> Option<(Vec<Pos>, u32)> {
     let start: Pos = Pos(
         origin_translation.x.round() as i32,
@@ -597,12 +596,12 @@ pub fn get_path_between_translations(
 
     let astar_result = astar(
         &start,
-        |p| get_astar_successors(p, &map),
+        |p| get_astar_successors(p, map),
         |p| ((p.0 - goal.0).abs() + (p.1 - goal.1).abs()) as u32,
         |p| *p == goal,
     );
 
-    return astar_result;
+    astar_result.map(|(path, _cost)| (path, 0))
 }
 
 pub fn calculate_velocity(origin: Vec3, destination: Vec3) -> Vec3 {
@@ -726,7 +725,7 @@ mod tests {
                 },
                 Walking {
                     target_translation: Vec3::new(2.0, 1.0, 0.0),
-                    path: Some((vec![Pos(0, 0), Pos(1, 0), Pos(2, 0)], 2)),
+                    path: Some((vec![Pos(0, 0), Pos(1, 0), Pos(2, 0)], 0)),
                 },
             ))
             .id();

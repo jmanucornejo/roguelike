@@ -18,7 +18,7 @@ The server keeps its current in-memory behavior when `DATABASE_URL` is not set.
 For local development, start the included MySQL container:
 
 ```powershell
-docker-compose up -d mysql
+docker-compose up -d mysql phpmyadmin
 docker-compose ps
 ```
 
@@ -40,6 +40,15 @@ The server applies the versioned migrations in `migrations/` when it connects.
 The Compose service provides the dedicated `roguelike` user with the development
 password `change-me`; do not reuse these credentials in production.
 
+phpMyAdmin is available at `http://localhost:8080` by default. Sign in with:
+
+- Server: `mysql`
+- Username: `roguelike`
+- Password: the value of `MYSQL_PASSWORD` in `.env`
+
+To use another host port, change `PHPMYADMIN_PORT` in `.env`. phpMyAdmin waits
+for the MySQL health check before starting.
+
 ## Development character persistence
 
 Until login and character selection are implemented, `PLAYER_ACCOUNT_ID` in
@@ -53,3 +62,16 @@ To run a second client at the same time, give its process a different account id
 $env:PLAYER_ACCOUNT_ID="2"
 cargo run --bin client
 ```
+
+## Base level progression
+
+Monster kills award base experience to the player credited as the killer. The
+server owns the calculation, replicates the resulting level and experience, and
+immediately queues persistent characters for a database save.
+
+The initial balancing values live in
+`src/shared/gameplay/progression.rs`: advancing requires
+`100 * current_level` experience, Pigs award 50 experience, and Orcs award 120.
+These values are intentionally centralized so the temporary curve can later be
+replaced by a Ragnarok-style experience table without changing combat or
+persistence code.
