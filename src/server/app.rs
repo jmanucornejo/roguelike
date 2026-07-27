@@ -13,6 +13,7 @@ use bevy_renet::netcode::{
 //use bevy_renet::renet::transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use bevy_renet::renet::{ClientId, ServerEvent};
 //use bevy_renet::transport::NetcodeServerPlugin;
+use crate::server::gameplay::items::{PendingItemPickup, RequestItemPickup, RequestItemUse};
 use crate::server::gameplay::monsters::*;
 use crate::server::gameplay::pathing::*;
 use crate::server::state::*;
@@ -33,6 +34,8 @@ use crate::server::persistence::{
 use crate::shared::constants::*;
 use crate::shared::gameplay::components::*;
 use crate::shared::gameplay::entities::{AttackSpeed, Player};
+use crate::shared::gameplay::items::{GroundItem, Inventory};
+use crate::shared::gameplay::progression::BaseProgression;
 use crate::shared::network::{channels::*, messages::*};
 use crate::shared::states::ServerState;
 use crate::world::setup_level;
@@ -83,6 +86,7 @@ pub fn run() {
         crate::server::network::clock_sync::ServerClockSyncPlugin,
         // crate::server::network::clock_server::ClockServerPlugin, // prototype
         crate::server::gameplay::combat::CombatPlugin,
+        crate::server::gameplay::items::ItemsPlugin,
     ))
     .add_plugins(RenetServerPlugin)
     .insert_resource(ServerVisualizer(RenetServerVisualizer::<200>::new(
@@ -105,6 +109,7 @@ pub fn run() {
         Update,
         (
             server_events,
+            save_changed_progression.after(server_events),
             // update_projectiles_system,
             // update_visualizer_system
         ),
@@ -170,6 +175,8 @@ struct PlayerSpawn {
     facing: Facing,
     health: Health,
     mana: Mana,
+    progression: BaseProgression,
+    inventory: Inventory,
     persistent: Option<PersistentCharacter>,
 }
 
@@ -193,11 +200,13 @@ impl PlayerSpawn {
                 current: 10,
                 max: 10,
             },
+            progression: BaseProgression::default(),
+            inventory: Inventory::default(),
             persistent: None,
         }
     }
 
-    fn from_record(record: CharacterRecord, map: &Map) -> Self {
+    fn from_record(record: CharacterRecord, map: &Map, inventory: Inventory) -> Self {
         let persistent = PersistentCharacter::from_record(&record);
         let saved_translation = Vec3::new(record.position_x, record.position_y, record.position_z);
         let spawn_translation = resolve_persistent_spawn(saved_translation, map);
@@ -221,6 +230,11 @@ impl PlayerSpawn {
                 current: record.sp,
                 max: record.max_sp,
             },
+            progression: BaseProgression {
+                level: record.base_level,
+                experience: record.base_experience,
+            },
+            inventory,
             persistent: Some(persistent),
         }
     }
@@ -280,6 +294,8 @@ fn spawn_player(
         facing.clone(),
         spawn.health,
         spawn.mana,
+        spawn.progression,
+        spawn.inventory,
         spawn.character_id,
         PrevState {
             translation: transform.translation,
@@ -310,6 +326,7 @@ fn send_player_create(
     facing: &Facing,
     health: &Health,
     mana: &Mana,
+    progression: BaseProgression,
     attack_speed: f32,
     server_time: u128,
 ) {
@@ -321,6 +338,7 @@ fn send_player_create(
         facing: facing.clone(),
         health: health.clone(),
         mana: mana.clone(),
+        progression,
         attack_speed,
         server_time,
     })
@@ -343,6 +361,8 @@ fn spawn_and_announce_player(
     let facing = spawn.facing.clone();
     let health = spawn.health.clone();
     let mana = spawn.mana.clone();
+    let progression = spawn.progression;
+    let inventory = spawn.inventory.clone();
     let player_entity = spawn_player(commands, meshes, materials, client_id, spawn);
 
     lobby.players.insert(client_id, player_entity);
@@ -361,9 +381,16 @@ fn spawn_and_announce_player(
         &facing,
         &health,
         &mana,
+        progression,
         0.5,
         server_time,
     );
+    let inventory_message = bincode::serialize(&ServerMessages::InventoryUpdated {
+        entity: player_entity,
+        inventory,
+    })
+    .expect("inventory update should serialize");
+    server.send_message(client_id, ServerChannel::ServerMessages, inventory_message);
     player_entity
 }
 
@@ -374,6 +401,7 @@ fn disconnect_snapshot(
     health: Option<&Health>,
     mana: Option<&Mana>,
     facing: Option<&Facing>,
+    progression: Option<&BaseProgression>,
     last_saved: Option<&CharacterSnapshot>,
 ) -> Result<(CharacterSnapshot, Vec<&'static str>), Vec<&'static str>> {
     let mut missing = Vec::new();
@@ -392,12 +420,21 @@ fn disconnect_snapshot(
     if facing.is_none() {
         missing.push("Facing");
     }
+    if progression.is_none() {
+        missing.push("BaseProgression");
+    }
 
-    if let (Some(transform), Some(persistent), Some(health), Some(mana), Some(facing)) =
-        (transform, persistent, health, mana, facing)
+    if let (
+        Some(transform),
+        Some(persistent),
+        Some(health),
+        Some(mana),
+        Some(facing),
+        Some(progression),
+    ) = (transform, persistent, health, mana, facing, progression)
     {
         return Ok((
-            persistent.snapshot(character_id, transform, facing, health, mana),
+            persistent.snapshot(character_id, transform, facing, health, mana, progression),
             missing,
         ));
     }
@@ -425,12 +462,14 @@ fn disconnect_snapshot(
         snapshot.max_sp = mana.max;
     }
     if let Some(persistent) = persistent {
-        snapshot.base_level = persistent.base_level;
-        snapshot.base_experience = persistent.base_experience;
         snapshot.job_level = persistent.job_level;
         snapshot.job_experience = persistent.job_experience;
         snapshot.zeny = persistent.zeny;
         snapshot.map_name.clone_from(&persistent.map_name);
+    }
+    if let Some(progression) = progression {
+        snapshot.base_level = progression.level;
+        snapshot.base_experience = progression.experience;
     }
 
     Ok((snapshot, missing))
@@ -562,6 +601,38 @@ fn finish_character_save(
     }
 }
 
+fn save_changed_progression(
+    persistence: Option<Res<PersistenceClient>>,
+    mut persistence_queue: ResMut<CharacterPersistenceQueue>,
+    players: Query<
+        (
+            &Transform,
+            &CharacterId,
+            &PersistentCharacter,
+            &Health,
+            &Mana,
+            &Facing,
+            &BaseProgression,
+        ),
+        (With<Player>, Changed<BaseProgression>),
+    >,
+) {
+    let Some(persistence) = persistence.as_deref() else {
+        return;
+    };
+
+    for (transform, character_id, persistent, health, mana, facing, progression) in &players {
+        let snapshot =
+            persistent.snapshot(*character_id, transform, facing, health, mana, progression);
+        request_character_save(
+            persistence,
+            &mut persistence_queue,
+            snapshot,
+            "progression save",
+        );
+    }
+}
+
 fn server_events(
     mut server_events: ResMut<PendingServerEvents>,
     mut commands: Commands,
@@ -579,6 +650,7 @@ fn server_events(
             Option<&Health>,
             Option<&Mana>,
             Option<&Facing>,
+            Option<&BaseProgression>,
         ),
         With<Player>,
     >,
@@ -642,6 +714,7 @@ fn server_events(
             PersistenceResponse::CharacterLoaded {
                 request_id,
                 character,
+                inventory,
             } => {
                 let Some(client_id) = persistence_queue.load_requests.remove(&request_id) else {
                     warn!("Received character load for unknown request {request_id}");
@@ -660,7 +733,7 @@ fn server_events(
                 let character_id = CharacterId(character.id);
                 if player_persistence_states
                     .iter()
-                    .any(|(_, _, active_id, _, _, _, _)| {
+                    .any(|(_, _, active_id, _, _, _, _, _)| {
                         active_id.is_some_and(|active_id| *active_id == character_id)
                     })
                 {
@@ -690,7 +763,7 @@ fn server_events(
                     &mut lobby,
                     &mut server,
                     client_id,
-                    PlayerSpawn::from_record(character, &map),
+                    PlayerSpawn::from_record(character, &map, inventory),
                     time.elapsed().as_millis(),
                 );
             }
@@ -705,6 +778,29 @@ fn server_events(
                     request_id,
                     character_id,
                     revision,
+                );
+            }
+            PersistenceResponse::InventoryItemAdded {
+                request_id,
+                character_id,
+                item_id,
+                quantity,
+            } => {
+                info!(
+                    "Persisted inventory item {} x{} for character {} (request {})",
+                    item_id.0, quantity, character_id.0, request_id
+                );
+            }
+            PersistenceResponse::InventoryItemRemoved {
+                request_id,
+                character_id,
+                item_id,
+                quantity,
+            } => {
+                info!(
+                    "Persisted inventory consumption for item {} (remaining x{}) for character {} \
+                     (request {})",
+                    item_id.0, quantity, character_id.0, request_id
                 );
             }
             PersistenceResponse::RequestFailed {
@@ -742,7 +838,7 @@ fn server_events(
         .just_finished()
     {
         if let Some(persistence) = persistence.as_deref() {
-            for (_entity, transform, character_id, persistent, health, mana, facing) in
+            for (_entity, transform, character_id, persistent, health, mana, facing, progression) in
                 &player_persistence_states
             {
                 let (
@@ -752,11 +848,27 @@ fn server_events(
                     Some(health),
                     Some(mana),
                     Some(facing),
-                ) = (transform, character_id, persistent, health, mana, facing)
+                    Some(progression),
+                ) = (
+                    transform,
+                    character_id,
+                    persistent,
+                    health,
+                    mana,
+                    facing,
+                    progression,
+                )
                 else {
                     continue;
                 };
-                let snapshot = persistent.snapshot(*character_id, transform, facing, health, mana);
+                let snapshot = persistent.snapshot(
+                    *character_id,
+                    transform,
+                    facing,
+                    health,
+                    mana,
+                    progression,
+                );
                 request_character_save(persistence, &mut persistence_queue, snapshot, "autosave");
             }
         }
@@ -814,7 +926,7 @@ fn server_events(
                     let tracked_character_id = lobby.characters.remove(&client_id);
                     let current_state = player_persistence_states.get(player_entity).ok();
                     let component_character_id = current_state
-                        .and_then(|(_, _, character_id, _, _, _, _)| character_id.copied());
+                        .and_then(|(_, _, character_id, _, _, _, _, _)| character_id.copied());
                     let character_id = component_character_id.or(tracked_character_id);
 
                     if persistence.is_none() {
@@ -829,8 +941,17 @@ fn server_events(
                     } else {
                         let character_id =
                             character_id.expect("nonzero character id was checked above");
-                        let (_, transform, _, persistent, health, mana, facing) = current_state
-                            .unwrap_or((player_entity, None, None, None, None, None, None));
+                        let (_, transform, _, persistent, health, mana, facing, progression) =
+                            current_state.unwrap_or((
+                                player_entity,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                            ));
                         let snapshot = disconnect_snapshot(
                             character_id,
                             transform,
@@ -838,6 +959,7 @@ fn server_events(
                             health,
                             mana,
                             facing,
+                            progression,
                             persistence_queue.last_saved.get(&character_id),
                         );
 
@@ -904,12 +1026,20 @@ fn server_events(
         while let Some(message) = server.receive_message(client_id, ClientChannel::Command) {
             let command: PlayerCommand = bincode::deserialize(&message).unwrap();
             match command {
-                PlayerCommand::Cast { spell_id, cast_at } => {
+                PlayerCommand::Cast {
+                    spell_id,
+                    cast_at,
+                    target_entity,
+                } => {
                     if let Some(player_entity) = lobby.players.get(&client_id) {
+                        commands
+                            .entity(*player_entity)
+                            .remove::<PendingItemPickup>();
                         commands.trigger(RequestSpellCast {
                             caster: *player_entity,
                             spell_id,
                             target: cast_at,
+                            target_entity,
                         });
                     }
                 }
@@ -937,6 +1067,9 @@ fn server_events(
                             let mut timer = Timer::from_seconds(1.0, TimerMode::Once);
                             timer.pause(); // Timer pausado hasta que este en rango de ataque
 
+                            commands
+                                .entity(*player_entity)
+                                .remove::<PendingItemPickup>();
                             commands.entity(*player_entity).insert(Aggro {
                                 enemy: monster_entity,
                                 auto_attack: true,
@@ -944,6 +1077,22 @@ fn server_events(
                                                                                   // timer: timer // El timer se debe definir al momento en que ya está en rango. Ya que el aspd puede variar mientras te acercas.
                             });
                         }
+                    }
+                }
+                PlayerCommand::PickupItem { entity } => {
+                    if let Some(player_entity) = lobby.players.get(&client_id) {
+                        commands.trigger(RequestItemPickup {
+                            player: *player_entity,
+                            ground_item: entity,
+                        });
+                    }
+                }
+                PlayerCommand::UseItem { item_id } => {
+                    if let Some(player_entity) = lobby.players.get(&client_id) {
+                        commands.trigger(RequestItemUse {
+                            player: *player_entity,
+                            item_id,
+                        });
                     }
                 }
                 PlayerCommand::Move { destination_at } => {
@@ -964,7 +1113,8 @@ fn server_events(
                             player_commands
                                 .remove::<Aggro>()
                                 .remove::<Attacking>()
-                                .remove::<AttackingTimer>();
+                                .remove::<AttackingTimer>()
+                                .remove::<PendingItemPickup>();
 
                             match path {
                                 Some(path) => {
@@ -1010,7 +1160,8 @@ fn server_events(
                             .remove::<Walking>()
                             .remove::<Aggro>()
                             .remove::<Attacking>()
-                            .remove::<AttackingTimer>();
+                            .remove::<AttackingTimer>()
+                            .remove::<PendingItemPickup>();
                     }
                 }
             }
@@ -1117,10 +1268,12 @@ pub fn line_of_sight(
             &Facing,
             &Health,
             &Mana,
+            &BaseProgression,
         ),
         With<Player>,
     >,
     treeaccess: Res<NNTree>,
+    ground_items: Query<(Entity, &GroundItem, &Transform)>,
     entities: Query<(Entity, &Transform, &SpriteId, &Facing, Option<&Health>)>,
     time: Res<Time>,
 ) {
@@ -1138,7 +1291,7 @@ pub fn line_of_sight(
             transform.translation,
             players
                 .iter()
-                .map(|(entity, _, transform, _, _, _, _, _)| (entity, transform.translation)),
+                .map(|(entity, _, transform, _, _, _, _, _, _)| (entity, transform.translation)),
         );
 
         let old_set: HashSet<Entity> = line_of_sight.0.iter().cloned().collect();
@@ -1168,6 +1321,7 @@ pub fn line_of_sight(
                 facing,
                 health,
                 mana,
+                progression,
             )) = players.get(*spawned_entity)
             {
                 let message = bincode::serialize(&ServerMessages::PlayerCreate {
@@ -1178,10 +1332,22 @@ pub fn line_of_sight(
                     facing: facing.clone(),
                     health: health.clone(),
                     mana: mana.clone(),
+                    progression: *progression,
                     attack_speed: attack_speed.0,
                     server_time: time.elapsed().as_millis(),
                 })
                 .unwrap();
+                server.send_message(player.id, ServerChannel::ServerMessages, message);
+                continue;
+            }
+
+            if let Ok((entity, item, transform)) = ground_items.get(*spawned_entity) {
+                let message = bincode::serialize(&ServerMessages::SpawnGroundItem {
+                    entity,
+                    item: item.clone(),
+                    translation: transform.translation.into(),
+                })
+                .expect("ground item spawn should serialize");
                 server.send_message(player.id, ServerChannel::ServerMessages, message);
                 continue;
             }
@@ -1302,6 +1468,7 @@ mod tests {
             Some(&health),
             None,
             Some(&facing),
+            None,
             Some(&cached),
         )
         .expect("the cached database state should complete the snapshot");
@@ -1310,7 +1477,10 @@ mod tests {
         assert_eq!(snapshot.hp, 31);
         assert_eq!(snapshot.sp, cached.sp);
         assert_eq!(snapshot.facing, 6);
-        assert_eq!(missing, vec!["PersistentCharacter", "Mana"]);
+        assert_eq!(
+            missing,
+            vec!["PersistentCharacter", "Mana", "BaseProgression"]
+        );
     }
 
     #[test]
@@ -1377,6 +1547,58 @@ mod tests {
         };
         assert_eq!(snapshot.position, current_position.to_array());
         assert_eq!(snapshot.expected_revision, 2);
+    }
+
+    #[test]
+    fn progression_change_queues_an_immediate_persistent_save() {
+        let character_id = CharacterId(1);
+        let (persistence, mut requests) = PersistenceClient::test_channel();
+        let mut world = World::new();
+        world.insert_resource(persistence);
+
+        let mut queue = CharacterPersistenceQueue::default();
+        queue.revisions.insert(character_id, 4);
+        world.insert_resource(queue);
+        world.spawn((
+            Player { id: 1 },
+            Transform::from_xyz(2.0, 1.0, -3.0),
+            character_id,
+            PersistentCharacter {
+                account_id: AccountId(1),
+                revision: 4,
+                job_level: 1,
+                job_experience: 0,
+                zeny: 0,
+                map_name: "starting_map".into(),
+            },
+            Health {
+                current: 40,
+                max: 40,
+            },
+            Mana {
+                current: 10,
+                max: 10,
+            },
+            Facing(2),
+            BaseProgression {
+                level: 3,
+                experience: 25,
+            },
+        ));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(save_changed_progression);
+        schedule.run(&mut world);
+
+        let PersistenceRequest::SaveCharacter { snapshot, .. } = requests
+            .try_recv()
+            .expect("progression change should queue a save")
+        else {
+            panic!("expected a character save request");
+        };
+        assert_eq!(snapshot.base_level, 3);
+        assert_eq!(snapshot.base_experience, 25);
+        assert_eq!(snapshot.expected_revision, 4);
     }
 
     #[test]

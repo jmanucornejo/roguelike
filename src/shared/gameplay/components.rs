@@ -55,14 +55,28 @@ pub struct Building {
     pub blocked_paths: Vec<Pos>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Component, Clone, Copy)]
 pub enum MonsterKind {
     Pig,
     Orc,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Component, Clone, Copy)]
+pub enum MonsterAggression {
+    /// Retaliates after any direct attack, but never initiates combat.
+    Passive,
+    /// Acquires nearby players without needing to be provoked.
+    Aggressive,
+    /// Ignores normal attacks and retaliates only against direct spells.
+    SpellReactive,
+}
+
 #[derive(Debug, Default, Component, Deserialize, Serialize, Clone)]
 pub struct SpriteId(pub u16);
+
+pub const PASSIVE_MONSTER_PLACEHOLDER_SPRITE: u16 = 1;
+pub const AGGRESSIVE_MONSTER_PLACEHOLDER_SPRITE: u16 = 2;
+pub const SPELL_REACTIVE_MONSTER_PLACEHOLDER_SPRITE: u16 = 3;
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Component, Clone)]
 pub struct Facing(pub u8);
@@ -105,6 +119,7 @@ pub struct Aggro {
 #[derive(Debug, PartialEq, Serialize, Deserialize, Component, Clone)]
 pub struct Walking {
     pub target_translation: Vec3,
+    /// Path cells and the index of the next waypoint to visit.
     pub path: Option<(Vec<Pos>, u32)>,
 }
 

@@ -1,6 +1,7 @@
 use sqlx::FromRow;
 
 use crate::shared::gameplay::components::{CharacterId, Facing, Health, Mana};
+use crate::shared::gameplay::progression::BaseProgression;
 use bevy::prelude::{Component, Transform};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -110,8 +111,6 @@ impl CharacterSnapshot {
 pub struct PersistentCharacter {
     pub account_id: AccountId,
     pub revision: u64,
-    pub base_level: u16,
-    pub base_experience: u64,
     pub job_level: u16,
     pub job_experience: u64,
     pub zeny: u64,
@@ -123,8 +122,6 @@ impl PersistentCharacter {
         Self {
             account_id: AccountId(record.account_id),
             revision: record.revision,
-            base_level: record.base_level,
-            base_experience: record.base_experience,
             job_level: record.job_level,
             job_experience: record.job_experience,
             zeny: record.zeny,
@@ -139,11 +136,12 @@ impl PersistentCharacter {
         facing: &Facing,
         health: &Health,
         mana: &Mana,
+        progression: &BaseProgression,
     ) -> CharacterSnapshot {
         CharacterSnapshot {
             character_id,
-            base_level: self.base_level,
-            base_experience: self.base_experience,
+            base_level: progression.level,
+            base_experience: progression.experience,
             job_level: self.job_level,
             job_experience: self.job_experience,
             hp: health.current,
@@ -169,8 +167,6 @@ mod tests {
         let persistent = PersistentCharacter {
             account_id: AccountId(7),
             revision: 3,
-            base_level: 12,
-            base_experience: 345,
             job_level: 8,
             job_experience: 89,
             zeny: 1_500,
@@ -190,6 +186,10 @@ mod tests {
                 current: 7,
                 max: 10,
             },
+            &BaseProgression {
+                level: 12,
+                experience: 345,
+            },
         );
 
         assert_eq!(snapshot.character_id, CharacterId(42));
@@ -197,6 +197,8 @@ mod tests {
         assert_eq!(snapshot.facing, 6);
         assert_eq!(snapshot.hp, 31);
         assert_eq!(snapshot.sp, 7);
+        assert_eq!(snapshot.base_level, 12);
+        assert_eq!(snapshot.base_experience, 345);
         assert_eq!(snapshot.expected_revision, 3);
     }
 }

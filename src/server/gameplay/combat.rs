@@ -5,12 +5,14 @@ use crate::{
         constants::ATTACK_HIT_FRACTION,
         gameplay::components::*,
         gameplay::entities::{AttackSpeed, MapEntity, Player, NPC},
+        gameplay::progression::{BaseProgression, ExperienceReward},
         network::{channels::ServerChannel, messages::ServerMessages},
     },
 };
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use bevy_renet::RenetServer;
+use rand::Rng;
 use std::time::Duration;
 // use avian3d::{parry::shape, prelude::*};
 use crate::shared::gameplay::events::*;
@@ -22,6 +24,149 @@ struct AttackAnimation {
     enemy: Entity,
     attack_speed: f32,
     auto_attack: bool,
+}
+
+const BASIC_ATTACK_DAMAGE_MIN: u32 = 4;
+const BASIC_ATTACK_DAMAGE_MAX: u32 = 7;
+const MONSTER_AGGRO_DETECTION_RANGE: f32 = 8.0;
+
+fn roll_basic_attack_damage(rng: &mut impl Rng) -> u32 {
+    rng.gen_range(BASIC_ATTACK_DAMAGE_MIN..=BASIC_ATTACK_DAMAGE_MAX)
+}
+
+fn aggression_reacts_to(aggression: MonsterAggression, _damage_origin: DamageOrigin) -> bool {
+    match aggression {
+        MonsterAggression::Passive
+        | MonsterAggression::Aggressive
+        | MonsterAggression::SpellReactive => true,
+    }
+}
+
+fn is_within_monster_vision(monster: Vec3, player: Vec3) -> bool {
+    let offset = player - monster;
+    Vec2::new(offset.x, offset.z).length_squared()
+        <= MONSTER_AGGRO_DETECTION_RANGE * MONSTER_AGGRO_DETECTION_RANGE
+}
+
+fn provoke_monster_on_damage(
+    trigger: On<HealthChange>,
+    monsters: Query<(&MonsterAggression, &Health, &Transform), With<Monster>>,
+    player_sources: Query<&Transform, With<Player>>,
+    mut commands: Commands,
+) {
+    let damage = trigger.event();
+    let Ok((aggression, health, monster_transform)) = monsters.get(damage.entity) else {
+        return;
+    };
+    if health.current == 0 || !aggression_reacts_to(*aggression, damage.origin) {
+        return;
+    }
+    let Some(source) = damage.source else {
+        return;
+    };
+    let Ok(source_transform) = player_sources.get(source) else {
+        return;
+    };
+    if !is_within_monster_vision(monster_transform.translation, source_transform.translation) {
+        return;
+    }
+
+    commands
+        .entity(damage.entity)
+        .try_remove::<Walking>()
+        .try_remove::<TargetPos>()
+        .try_remove::<Attacking>()
+        .try_remove::<AttackingTimer>()
+        .try_insert(Aggro {
+            enemy: source,
+            auto_attack: true,
+            enemy_translation: source_transform.translation,
+        });
+}
+
+fn provoke_spell_reactive_monster(
+    trigger: On<DirectSpellTargeted>,
+    monsters: Query<(&MonsterAggression, &Health, &Transform), With<Monster>>,
+    player_sources: Query<&Transform, With<Player>>,
+    mut commands: Commands,
+) {
+    let targeted = trigger.event();
+    let Ok((aggression, health, monster_transform)) = monsters.get(targeted.monster) else {
+        return;
+    };
+    if *aggression != MonsterAggression::SpellReactive || health.current == 0 {
+        return;
+    }
+    let Ok(caster_transform) = player_sources.get(targeted.caster) else {
+        return;
+    };
+    if !is_within_monster_vision(monster_transform.translation, caster_transform.translation) {
+        return;
+    }
+
+    commands
+        .entity(targeted.monster)
+        .try_remove::<Walking>()
+        .try_remove::<TargetPos>()
+        .try_remove::<Attacking>()
+        .try_remove::<AttackingTimer>()
+        .try_insert(Aggro {
+            enemy: targeted.caster,
+            auto_attack: true,
+            enemy_translation: caster_transform.translation,
+        });
+}
+
+fn acquire_aggressive_monster_targets(
+    monsters: Query<
+        (
+            Entity,
+            &Transform,
+            &MonsterAggression,
+            &Health,
+            Option<&Aggro>,
+        ),
+        With<Monster>,
+    >,
+    players: Query<(Entity, &Transform, &Health), With<Player>>,
+    mut commands: Commands,
+) {
+    let detection_range_squared = MONSTER_AGGRO_DETECTION_RANGE * MONSTER_AGGRO_DETECTION_RANGE;
+    for (monster_entity, monster_transform, aggression, health, current_aggro) in &monsters {
+        if *aggression != MonsterAggression::Aggressive
+            || health.current == 0
+            || current_aggro.is_some()
+        {
+            continue;
+        }
+
+        let closest = players
+            .iter()
+            .filter(|(_, _, player_health)| player_health.current > 0)
+            .filter_map(|(player_entity, player_transform, _)| {
+                let offset = player_transform.translation - monster_transform.translation;
+                let distance_squared = Vec2::new(offset.x, offset.z).length_squared();
+                (distance_squared <= detection_range_squared).then_some((
+                    player_entity,
+                    player_transform.translation,
+                    distance_squared,
+                ))
+            })
+            .min_by(|left, right| left.2.total_cmp(&right.2));
+
+        let Some((player_entity, player_translation, _)) = closest else {
+            continue;
+        };
+        commands
+            .entity(monster_entity)
+            .try_remove::<Walking>()
+            .try_remove::<TargetPos>()
+            .try_insert(Aggro {
+                enemy: player_entity,
+                auto_attack: true,
+                enemy_translation: player_translation,
+            });
+    }
 }
 
 fn attack_cycle_timer(attack_period: f32, auto_attack: bool) -> Timer {
@@ -39,9 +184,295 @@ fn attack_cycle_timer(attack_period: f32, auto_attack: bool) -> Timer {
     timer
 }
 
+fn on_death_give_experience(
+    trigger: On<DeathEvent>,
+    rewards: Query<&ExperienceReward, With<Monster>>,
+    mut players: Query<&mut BaseProgression, With<Player>>,
+) {
+    let death_event = trigger.event();
+    let Ok(reward) = rewards.get(death_event.entity) else {
+        return;
+    };
+    let Some(killer) = death_event.killer else {
+        return;
+    };
+    let Ok(mut progression) = players.get_mut(killer) else {
+        return;
+    };
+
+    let previous_level = progression.level;
+    let gain = progression.grant_experience(reward.0);
+    info!(
+        "Player {killer:?} gained {} base XP (level {}, XP {})",
+        gain.amount, progression.level, progression.experience
+    );
+    if gain.levels_gained > 0 {
+        info!(
+            "Player {killer:?} gained {} base level(s): {} -> {}",
+            gain.levels_gained, previous_level, progression.level
+        );
+    }
+}
+
+fn should_receive_attack_state(
+    viewer_entity: Entity,
+    attacking_entity: Entity,
+    line_of_sight: &LineOfSight,
+) -> bool {
+    viewer_entity == attacking_entity || line_of_sight.0.contains(&attacking_entity)
+}
+
 #[cfg(test)]
 mod attack_timing_tests {
     use super::*;
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::collections::HashSet;
+
+    #[test]
+    fn basic_attack_damage_stays_inside_the_inclusive_range() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let rolls: HashSet<u32> = (0..1_024)
+            .map(|_| roll_basic_attack_damage(&mut rng))
+            .collect();
+
+        assert_eq!(
+            rolls,
+            HashSet::from([
+                BASIC_ATTACK_DAMAGE_MIN,
+                BASIC_ATTACK_DAMAGE_MIN + 1,
+                BASIC_ATTACK_DAMAGE_MIN + 2,
+                BASIC_ATTACK_DAMAGE_MAX,
+            ])
+        );
+    }
+
+    #[test]
+    fn aggression_modes_apply_the_expected_provocation_rules() {
+        assert!(aggression_reacts_to(
+            MonsterAggression::Passive,
+            DamageOrigin::BasicAttack
+        ));
+        assert!(aggression_reacts_to(
+            MonsterAggression::Passive,
+            DamageOrigin::DirectSpell
+        ));
+        assert!(aggression_reacts_to(
+            MonsterAggression::Aggressive,
+            DamageOrigin::BasicAttack
+        ));
+        assert!(aggression_reacts_to(
+            MonsterAggression::SpellReactive,
+            DamageOrigin::BasicAttack
+        ));
+        assert!(aggression_reacts_to(
+            MonsterAggression::SpellReactive,
+            DamageOrigin::DirectSpell
+        ));
+    }
+
+    #[test]
+    fn passive_monster_retaliates_against_the_attacking_player() {
+        let mut app = App::new();
+        app.add_observer(provoke_monster_on_damage);
+        let player = app
+            .world_mut()
+            .spawn((Player { id: 1 }, Transform::from_xyz(3.0, 1.0, 2.0)))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Pig,
+                },
+                MonsterAggression::Passive,
+                Transform::default(),
+                Health {
+                    current: 100,
+                    max: 100,
+                },
+            ))
+            .id();
+
+        app.world_mut().trigger(HealthChange {
+            entity: monster,
+            source: Some(player),
+            amount: 5,
+            damage: 5,
+            damage_type: HealthChangeType::Normal,
+            origin: DamageOrigin::BasicAttack,
+        });
+        app.world_mut().flush();
+
+        let aggro = app.world().get::<Aggro>(monster).unwrap();
+        assert_eq!(aggro.enemy, player);
+        assert_eq!(aggro.enemy_translation, Vec3::new(3.0, 1.0, 2.0));
+    }
+
+    #[test]
+    fn spell_reactive_monster_retaliates_against_attacks_and_direct_spells() {
+        let mut app = App::new();
+        app.add_observer(provoke_monster_on_damage);
+        let player = app
+            .world_mut()
+            .spawn((Player { id: 1 }, Transform::from_xyz(2.0, 1.0, 0.0)))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Pig,
+                },
+                MonsterAggression::SpellReactive,
+                Transform::default(),
+                Health {
+                    current: 100,
+                    max: 100,
+                },
+            ))
+            .id();
+
+        for origin in [DamageOrigin::BasicAttack, DamageOrigin::DirectSpell] {
+            app.world_mut().trigger(HealthChange {
+                entity: monster,
+                source: Some(player),
+                amount: 5,
+                damage: 5,
+                damage_type: HealthChangeType::Normal,
+                origin,
+            });
+            app.world_mut().flush();
+            assert_eq!(app.world().get::<Aggro>(monster).unwrap().enemy, player);
+            app.world_mut().entity_mut(monster).remove::<Aggro>();
+        }
+    }
+
+    #[test]
+    fn spell_reactive_monster_aggroes_when_direct_cast_begins() {
+        let mut app = App::new();
+        app.add_observer(provoke_spell_reactive_monster);
+        let player = app
+            .world_mut()
+            .spawn((Player { id: 1 }, Transform::from_xyz(4.0, 1.0, 2.0)))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Pig,
+                },
+                MonsterAggression::SpellReactive,
+                Transform::default(),
+                Health {
+                    current: 100,
+                    max: 100,
+                },
+            ))
+            .id();
+
+        app.world_mut().trigger(DirectSpellTargeted {
+            monster,
+            caster: player,
+        });
+        app.world_mut().flush();
+
+        let aggro = app.world().get::<Aggro>(monster).unwrap();
+        assert_eq!(aggro.enemy, player);
+        assert_eq!(aggro.enemy_translation, Vec3::new(4.0, 1.0, 2.0));
+    }
+
+    #[test]
+    fn provocation_outside_monster_vision_does_not_create_aggro() {
+        let mut app = App::new();
+        app.add_observer(provoke_monster_on_damage)
+            .add_observer(provoke_spell_reactive_monster);
+        let player = app
+            .world_mut()
+            .spawn((Player { id: 1 }, Transform::from_xyz(9.0, 1.0, 0.0)))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Pig,
+                },
+                MonsterAggression::SpellReactive,
+                Transform::default(),
+                Health {
+                    current: 100,
+                    max: 100,
+                },
+            ))
+            .id();
+
+        app.world_mut().trigger(DirectSpellTargeted {
+            monster,
+            caster: player,
+        });
+        app.world_mut().trigger(HealthChange {
+            entity: monster,
+            source: Some(player),
+            amount: 20,
+            damage: 20,
+            damage_type: HealthChangeType::Normal,
+            origin: DamageOrigin::DirectSpell,
+        });
+        app.world_mut().flush();
+
+        assert!(app.world().get::<Aggro>(monster).is_none());
+    }
+
+    #[test]
+    fn aggressive_monster_acquires_the_closest_living_player() {
+        let mut app = App::new();
+        app.add_systems(Update, acquire_aggressive_monster_targets);
+        let farther = app
+            .world_mut()
+            .spawn((
+                Player { id: 1 },
+                Transform::from_xyz(6.0, 1.0, 0.0),
+                Health {
+                    current: 40,
+                    max: 40,
+                },
+            ))
+            .id();
+        let closest = app
+            .world_mut()
+            .spawn((
+                Player { id: 2 },
+                Transform::from_xyz(3.0, 1.0, 0.0),
+                Health {
+                    current: 40,
+                    max: 40,
+                },
+            ))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Orc,
+                },
+                MonsterAggression::Aggressive,
+                Transform::default(),
+                Health {
+                    current: 100,
+                    max: 100,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let aggro = app.world().get::<Aggro>(monster).unwrap();
+        assert_eq!(aggro.enemy, closest);
+        assert_ne!(aggro.enemy, farther);
+    }
 
     #[test]
     fn first_hit_occurs_when_the_fifth_frame_begins() {
@@ -106,6 +537,61 @@ mod attack_timing_tests {
             None
         );
     }
+
+    #[test]
+    fn killing_a_monster_rewards_the_killing_player() {
+        let mut app = App::new();
+        app.add_plugins(CombatPlugin);
+
+        let killer = app
+            .world_mut()
+            .spawn((Player { id: 1 }, BaseProgression::default()))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Pig,
+                },
+                ExperienceReward(120),
+                Transform::default(),
+            ))
+            .id();
+
+        app.world_mut().trigger(DeathEvent {
+            entity: monster,
+            killer: Some(killer),
+        });
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().get::<BaseProgression>(killer),
+            Some(&BaseProgression {
+                level: 2,
+                experience: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn player_receives_own_attack_state_without_self_in_line_of_sight() {
+        let mut world = World::new();
+        let viewer = world.spawn_empty().id();
+        let other = world.spawn_empty().id();
+        let empty_line_of_sight = LineOfSight::default();
+
+        assert!(should_receive_attack_state(
+            viewer,
+            viewer,
+            &empty_line_of_sight
+        ));
+        assert!(!should_receive_attack_state(
+            viewer,
+            other,
+            &empty_line_of_sight
+        ));
+    }
 }
 
 pub struct CombatPlugin;
@@ -118,19 +604,22 @@ impl Plugin for CombatPlugin {
             (
                 network_change_attacking_state.run_if(in_state(ServerState::InGame)),
                 network_send_delta_health_system.run_if(in_state(ServerState::InGame)),
+                network_send_progression_system.run_if(in_state(ServerState::InGame)),
                 recalculate_path
                     .before(crate::server::gameplay::pathing::apply_rapier3d_velocity_system),
+                acquire_aggressive_monster_targets.run_if(in_state(ServerState::InGame)),
                 aggro_rapier3d
                     .run_if(in_state(ServerState::InGame))
                     .before(crate::server::gameplay::pathing::apply_rapier3d_velocity_system),
                 attack.run_if(in_state(ServerState::InGame)),
             ),
         )
+        .add_observer(provoke_monster_on_damage)
+        .add_observer(provoke_spell_reactive_monster)
         .add_observer(on_death_stop_attackers)
         .add_observer(on_health_change)
-        .add_observer(on_death_despawn_monsters)
-        .add_observer(on_death_spawn_loot)
-        .add_observer(on_death_give_experience);
+        .add_observer(on_death_give_experience)
+        .add_observer(on_death_despawn_monsters);
 
         fn aggro_rapier3d(
             mut aggroed_entities: Query<
@@ -185,15 +674,15 @@ impl Plugin for CombatPlugin {
 
                         commands
                             .entity(entity)
-                            .insert(AttackingTimer(timer))
-                            .insert(Attacking {
+                            .try_insert(AttackingTimer(timer))
+                            .try_insert(Attacking {
                                 enemy: aggroed.enemy,
                                 auto_attack: aggroed.auto_attack,
                                 //enemy_translation: aggroed.enemy_translation,
                                 // timer: timer
                             })
-                            .remove::<Walking>()
-                            .remove::<TargetPos>();
+                            .try_remove::<Walking>()
+                            .try_remove::<TargetPos>();
 
                         continue;
                     }
@@ -218,12 +707,12 @@ impl Plugin for CombatPlugin {
 
                     commands
                         .entity(entity)
-                        .insert(Walking {
+                        .try_insert(Walking {
                             target_translation: aggroed.enemy_translation,
                             path: path,
                         })
-                        .remove::<Attacking>()
-                        .remove::<AttackingTimer>();
+                        .try_remove::<Attacking>()
+                        .try_remove::<AttackingTimer>();
 
                     // Si hay camino, se intenta acercar.
                     /*if let Some((steps_vec, steps_left)) = aggroed.path.clone() {
@@ -259,6 +748,7 @@ impl Plugin for CombatPlugin {
             mut commands: Commands,
             time: Res<Time>,
         ) {
+            let mut rng = rand::thread_rng();
             for (entity, attacking, attack_speed, mut attacking_timer) in
                 attacking_entities.iter_mut()
             {
@@ -279,20 +769,22 @@ impl Plugin for CombatPlugin {
                 }
 
                 info!("Finalizó el timer. Timer: {:?}", attacking_timer.0);
+                let damage = roll_basic_attack_damage(&mut rng);
                 commands.trigger(HealthChange {
                     entity: attacking.enemy,
                     source: Some(entity),
-                    amount: 5,
-                    damage: 5,
+                    amount: damage as i32,
+                    damage,
                     damage_type: HealthChangeType::Normal,
+                    origin: DamageOrigin::BasicAttack,
                 });
 
                 if (attacking.auto_attack == false) {
                     commands
                         .entity(entity)
-                        .remove::<Aggro>()
-                        .remove::<Attacking>()
-                        .remove::<AttackingTimer>();
+                        .try_remove::<Aggro>()
+                        .try_remove::<Attacking>()
+                        .try_remove::<AttackingTimer>();
                     continue;
                 }
             }
@@ -434,14 +926,14 @@ impl Plugin for CombatPlugin {
 
         fn on_death_despawn_monsters(
             trigger: On<DeathEvent>,
-            mut query: Query<(Entity)>,
+            query: Query<Entity, With<Monster>>,
             mut commands: Commands,
         ) {
             // If a triggered event is targeting a specific entity you can access it with `.entity()`
             let death_event = trigger.event();
             let id: Entity = death_event.entity;
             info!("Muere la entidad:  {:?} ", id);
-            if let Ok((entity)) = query.get_mut(id) {
+            if let Ok(entity) = query.get(id) {
                 commands.entity(entity).despawn();
                 info!("Muere la entidad:  {:?} ", entity);
                 // Si es jugador, mantenrlo muerto en el piso.
@@ -475,14 +967,15 @@ impl Plugin for CombatPlugin {
 
                 commands
                     .entity(attacker)
-                    .remove::<Aggro>()
-                    .remove::<Attacking>()
-                    .remove::<AttackingTimer>()
-                    .remove::<Walking>()
-                    .remove::<TargetPos>();
+                    .try_remove::<Aggro>()
+                    .try_remove::<Attacking>()
+                    .try_remove::<AttackingTimer>()
+                    .try_remove::<Walking>()
+                    .try_remove::<TargetPos>();
             }
         }
 
+        /*
         fn on_death_spawn_loot(
             trigger: On<DeathEvent>,
             mut query: Query<(&Transform)>,
@@ -498,22 +991,8 @@ impl Plugin for CombatPlugin {
                 // Si es monstruo, debe soltar ítems.
             }
         }
+        */
 
-        fn on_death_give_experience(
-            trigger: On<DeathEvent>,
-            mut query: Query<(&Monster)>,
-            mut commands: Commands,
-        ) {
-            // If a triggered event is targeting a specific entity you can access it with `.entity()`
-            let death_event = trigger.event();
-            let id: Entity = death_event.entity;
-
-            if let Ok((monster)) = query.get_mut(id) {
-                info!("Se da X experiencia a:  {:?} ", death_event.killer);
-                // Si es jugador, mantenrlo muerto en el piso.
-                // Si es monstruo, debe soltar ítems.
-            }
-        }
         fn on_health_change(
             trigger: On<HealthChange>,
             mut query: Query<(Entity, &mut Health)>,
@@ -526,6 +1005,9 @@ impl Plugin for CombatPlugin {
             let id: Entity = health_change.entity;
 
             if let Ok((entity, mut health)) = query.get_mut(id) {
+                if health.current == 0 {
+                    return;
+                }
                 info!("Entity  {:?} damaged.", id.index());
 
                 let message = bincode::serialize(&ServerMessages::DamageNumber {
@@ -544,6 +1026,7 @@ impl Plugin for CombatPlugin {
                 }
 
                 if (health.current <= health_change.damage) {
+                    health.current = 0;
                     commands.trigger(DeathEvent {
                         entity: health_change.entity,
                         killer: health_change.source,
@@ -557,26 +1040,29 @@ impl Plugin for CombatPlugin {
 
         pub fn network_change_attacking_state(
             mut server: ResMut<RenetServer>,
-            players: Query<(&Player, &LineOfSight)>,
-            mut entities: Query<
+            players: Query<(Entity, &Player, &LineOfSight)>,
+            entities: Query<
                 (Entity, &Attacking, &AttackSpeed),
                 Or<(Changed<Attacking>, Changed<AttackSpeed>)>,
             >,
             mut stopped_attacking: RemovedComponents<Attacking>,
         ) {
-            for (player, line_of_sight) in players.iter() {
-                for entity in line_of_sight.0.iter() {
-                    if let Ok((entity, attacking, attack_speed)) = entities.get_mut(*entity) {
-                        let message = ServerMessages::Attack {
-                            entity,
-                            enemy: attacking.enemy,
-                            attack_speed: attack_speed.0,
-                            auto_attack: attacking.auto_attack,
-                        };
+            for (entity, attacking, attack_speed) in &entities {
+                let message = bincode::serialize(&ServerMessages::Attack {
+                    entity,
+                    enemy: attacking.enemy,
+                    attack_speed: attack_speed.0,
+                    auto_attack: attacking.auto_attack,
+                })
+                .expect("attack message should serialize");
 
-                        let sync_message = bincode::serialize(&message).unwrap();
-                        // Send message to only one client
-                        server.send_message(player.id, ServerChannel::ServerMessages, sync_message);
+                for (viewer_entity, player, line_of_sight) in &players {
+                    if should_receive_attack_state(viewer_entity, entity, line_of_sight) {
+                        server.send_message(
+                            player.id,
+                            ServerChannel::ServerMessages,
+                            message.clone(),
+                        );
                     }
                 }
             }
@@ -585,8 +1071,8 @@ impl Plugin for CombatPlugin {
                 let message =
                     bincode::serialize(&ServerMessages::AttackStopped { entity }).unwrap();
 
-                for (player, line_of_sight) in players.iter() {
-                    if line_of_sight.0.contains(&entity) {
+                for (viewer_entity, player, line_of_sight) in &players {
+                    if should_receive_attack_state(viewer_entity, entity, line_of_sight) {
                         server.send_message(
                             player.id,
                             ServerChannel::ServerMessages,
@@ -616,6 +1102,30 @@ impl Plugin for CombatPlugin {
                         let sync_message = bincode::serialize(&message).unwrap();
                         // Send message to only one client
                         server.send_message(player.id, ServerChannel::ServerMessages, sync_message);
+                    }
+                }
+            }
+        }
+
+        pub fn network_send_progression_system(
+            mut server: ResMut<RenetServer>,
+            viewers: Query<(Entity, &Player, &LineOfSight)>,
+            changed_progression: Query<(Entity, &BaseProgression), Changed<BaseProgression>>,
+        ) {
+            for (entity, progression) in &changed_progression {
+                let message = bincode::serialize(&ServerMessages::ProgressionChanged {
+                    entity,
+                    progression: *progression,
+                })
+                .expect("progression message should serialize");
+
+                for (viewer_entity, player, line_of_sight) in &viewers {
+                    if viewer_entity == entity || line_of_sight.0.contains(&entity) {
+                        server.send_message(
+                            player.id,
+                            ServerChannel::ServerMessages,
+                            message.clone(),
+                        );
                     }
                 }
             }

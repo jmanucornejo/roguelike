@@ -5,6 +5,7 @@ use super::models::{
     AccountId, CharacterRecord, CharacterSnapshot, CharacterSummary, NewCharacter,
 };
 use crate::shared::gameplay::components::CharacterId;
+use crate::shared::gameplay::items::{Inventory, ItemDefinitionId};
 
 const CHARACTER_COLUMNS: &str = r#"
     id, account_id, slot, name, class_id,
@@ -155,6 +156,181 @@ impl CharacterRepository {
         Ok(snapshot.expected_revision + 1)
     }
 
+    pub(super) async fn load_inventory(
+        &self,
+        character_id: CharacterId,
+    ) -> Result<Inventory, sqlx::Error> {
+        let rows = sqlx::query_as::<_, (u32, u32)>(
+            r#"
+            SELECT item_definition_id, quantity
+            FROM inventory_items
+            WHERE character_id = ? AND equipped_slot IS NULL
+            ORDER BY item_definition_id, id
+            "#,
+        )
+        .bind(character_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut inventory = Inventory::default();
+        for (item_definition_id, quantity) in rows {
+            inventory.add(ItemDefinitionId(item_definition_id), quantity);
+        }
+        Ok(inventory)
+    }
+
+    pub(super) async fn add_inventory_item(
+        &self,
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+        quantity: u32,
+    ) -> Result<u32, RepositoryError> {
+        if quantity == 0 {
+            return Ok(0);
+        }
+
+        let mut transaction = self.pool.begin().await?;
+
+        // Lock the character row first. The persistence worker is currently
+        // serial, but this also keeps stacking correct if more workers are
+        // introduced later.
+        sqlx::query_scalar::<_, u64>(
+            r#"
+            SELECT id
+            FROM characters
+            WHERE id = ? AND deleted_at IS NULL
+            FOR UPDATE
+            "#,
+        )
+        .bind(character_id.0)
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        let existing = sqlx::query_as::<_, (u64, u32)>(
+            r#"
+            SELECT id, quantity
+            FROM inventory_items
+            WHERE character_id = ?
+              AND item_definition_id = ?
+              AND equipped_slot IS NULL
+            ORDER BY id
+            LIMIT 1
+            FOR UPDATE
+            "#,
+        )
+        .bind(character_id.0)
+        .bind(item_id.0)
+        .fetch_optional(&mut *transaction)
+        .await?;
+
+        let new_quantity = if let Some((inventory_item_id, current_quantity)) = existing {
+            let new_quantity = current_quantity.saturating_add(quantity);
+            sqlx::query(
+                r#"
+                UPDATE inventory_items
+                SET quantity = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(new_quantity)
+            .bind(inventory_item_id)
+            .execute(&mut *transaction)
+            .await?;
+            new_quantity
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO inventory_items (
+                    character_id,
+                    item_definition_id,
+                    quantity
+                )
+                VALUES (?, ?, ?)
+                "#,
+            )
+            .bind(character_id.0)
+            .bind(item_id.0)
+            .bind(quantity)
+            .execute(&mut *transaction)
+            .await?;
+            quantity
+        };
+
+        transaction.commit().await?;
+        Ok(new_quantity)
+    }
+
+    pub(super) async fn remove_inventory_item(
+        &self,
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+        quantity: u32,
+    ) -> Result<u32, RepositoryError> {
+        if quantity == 0 {
+            return Ok(0);
+        }
+
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query_scalar::<_, u64>(
+            r#"
+            SELECT id
+            FROM characters
+            WHERE id = ? AND deleted_at IS NULL
+            FOR UPDATE
+            "#,
+        )
+        .bind(character_id.0)
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        let existing = sqlx::query_as::<_, (u64, u32)>(
+            r#"
+            SELECT id, quantity
+            FROM inventory_items
+            WHERE character_id = ?
+              AND item_definition_id = ?
+              AND equipped_slot IS NULL
+            ORDER BY id
+            LIMIT 1
+            FOR UPDATE
+            "#,
+        )
+        .bind(character_id.0)
+        .bind(item_id.0)
+        .fetch_optional(&mut *transaction)
+        .await?;
+
+        let Some((inventory_item_id, current_quantity)) = existing else {
+            return Err(RepositoryError::InsufficientInventoryItem {
+                character_id,
+                item_id,
+            });
+        };
+        if current_quantity < quantity {
+            return Err(RepositoryError::InsufficientInventoryItem {
+                character_id,
+                item_id,
+            });
+        }
+
+        let new_quantity = current_quantity - quantity;
+        if new_quantity == 0 {
+            sqlx::query("DELETE FROM inventory_items WHERE id = ?")
+                .bind(inventory_item_id)
+                .execute(&mut *transaction)
+                .await?;
+        } else {
+            sqlx::query("UPDATE inventory_items SET quantity = ? WHERE id = ?")
+                .bind(new_quantity)
+                .bind(inventory_item_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        transaction.commit().await?;
+        Ok(new_quantity)
+    }
+
     async fn ensure_development_account(&self, account_id: AccountId) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
@@ -240,6 +416,10 @@ pub(super) enum RepositoryError {
     InvalidCharacterSlot,
     RevisionConflict(CharacterId),
     CreatedCharacterMissing(CharacterId),
+    InsufficientInventoryItem {
+        character_id: CharacterId,
+        item_id: ItemDefinitionId,
+    },
 }
 
 impl fmt::Display for RepositoryError {
@@ -263,6 +443,14 @@ impl fmt::Display for RepositoryError {
                 formatter,
                 "newly created character {} could not be loaded",
                 character_id.0
+            ),
+            Self::InsufficientInventoryItem {
+                character_id,
+                item_id,
+            } => write!(
+                formatter,
+                "character {} does not have enough of item {}",
+                character_id.0, item_id.0
             ),
         }
     }

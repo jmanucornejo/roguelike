@@ -7,6 +7,12 @@ pub enum HealthChangeType {
     Critical,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DamageOrigin {
+    BasicAttack,
+    DirectSpell,
+}
+
 #[derive(Event, Debug)]
 pub struct HealthChange {
     pub entity: Entity,
@@ -14,6 +20,13 @@ pub struct HealthChange {
     pub amount: i32,
     pub damage: u32,
     pub damage_type: HealthChangeType,
+    pub origin: DamageOrigin,
+}
+
+#[derive(Event, Debug, Clone, Copy)]
+pub struct DirectSpellTargeted {
+    pub monster: Entity,
+    pub caster: Entity,
 }
 
 #[derive(Event, Debug)]

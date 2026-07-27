@@ -23,6 +23,7 @@ const CAST_BAR_WORLD_OFFSET: f32 = 1.65;
 pub(crate) struct RequestSpellCast {
     pub(crate) spell_id: u16,
     pub(crate) translation: Vec3,
+    pub(crate) target_entity: Option<Entity>,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -143,6 +144,7 @@ fn on_request_spell_cast(
     player_commands.write(PlayerCommand::Cast {
         spell_id: request.spell_id,
         cast_at: request.translation,
+        target_entity: request.target_entity,
     });
 }
 

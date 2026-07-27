@@ -280,6 +280,19 @@ impl Plugin for AnimationsPlugin {
                     };
 
                     if let Some((enemy, attack_period, auto_attack)) = attack {
+                        // Auto-attacks repeat until the authoritative stop arrives.
+                        // If the target despawns first (for example, on death), the
+                        // animation must not loop forever while waiting for a state
+                        // message that may have crossed a line-of-sight transition.
+                        if transforms.get(enemy).is_err() {
+                            *animation = Animation::Idle;
+                            *walking_visibility = Visibility::Inherited;
+                            *attack_visibility = Visibility::Hidden;
+                            walking_sprite.flip_x = false;
+                            timer.0 = Timer::from_seconds(0.1, TimerMode::Repeating);
+                            continue;
+                        }
+
                         let previous_direction =
                             last_direction.as_deref().map(|direction| direction.0);
                         let attack_direction = transforms
