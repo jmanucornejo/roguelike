@@ -3,7 +3,10 @@ use bevy_rapier3d::prelude::{CharacterLength, KinematicCharacterController, Quer
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::shared::constants::{CHARACTER_CONTROLLER_OFFSET, CHARACTER_GROUND_SNAP_DISTANCE};
+use crate::shared::{
+    constants::{CHARACTER_CONTROLLER_OFFSET, CHARACTER_GROUND_SNAP_DISTANCE},
+    gameplay::items::ItemDefinitionId,
+};
 // use crate::shared::enums::DamageType;
 
 /// Stable database identity for a player character.
@@ -14,6 +17,366 @@ use crate::shared::constants::{CHARACTER_CONTROLLER_OFFSET, CHARACTER_GROUND_SNA
     Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Component,
 )]
 pub struct CharacterId(pub u64);
+
+/// The character's authoritative currency balance.
+#[derive(
+    Component, Reflect, Debug, Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize,
+)]
+pub struct Gold(pub u64);
+
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, Eq, PartialEq)]
+pub struct Dead;
+
+/// Marks a player who has deliberately stopped to sit.
+///
+/// Sitting is transient gameplay state: it is replicated while connected but
+/// is not persisted when a character logs out.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, Eq, PartialEq)]
+pub struct Sitting;
+
+#[derive(Component, Reflect, Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CharacterStats {
+    pub might: u16,
+    pub finesse: u16,
+    pub agility: u16,
+    pub vitality: u16,
+    pub intellect: u16,
+    pub spirit: u16,
+    pub available_points: u32,
+}
+
+pub const MAX_ATTRIBUTE_VALUE: u16 = 99;
+pub const STARTING_ATTRIBUTE_POINTS: u32 = 48;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum CharacterAttribute {
+    Might = 0,
+    Finesse = 1,
+    Agility = 2,
+    Vitality = 3,
+    Intellect = 4,
+    Spirit = 5,
+}
+
+impl CharacterAttribute {
+    pub const ALL: [Self; 6] = [
+        Self::Might,
+        Self::Finesse,
+        Self::Agility,
+        Self::Vitality,
+        Self::Intellect,
+        Self::Spirit,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Might => "Might",
+            Self::Finesse => "Finesse",
+            Self::Agility => "Agility",
+            Self::Vitality => "Vitality",
+            Self::Intellect => "Intellect",
+            Self::Spirit => "Spirit",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Might => "Raises physical attack.",
+            Self::Finesse => "Raises physical HIT.",
+            Self::Agility => "Raises FLEE.",
+            Self::Vitality => "Raises maximum HP.",
+            Self::Intellect => "Raises maximum SP and magic power.",
+            Self::Spirit => "Raises maximum SP and magic power.",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttributeSpendError {
+    InsufficientPoints { required: u32, available: u32 },
+    AttributeAtMaximum,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DerivedCharacterStats {
+    pub hit: u32,
+    pub flee: u32,
+    pub max_health: u32,
+    pub max_mana: u32,
+    pub physical_attack: u32,
+    pub magic_power: u32,
+    pub physical_defense: u32,
+    pub magic_defense: u32,
+}
+
+impl Default for CharacterStats {
+    fn default() -> Self {
+        Self {
+            might: 1,
+            finesse: 1,
+            agility: 1,
+            vitality: 1,
+            intellect: 1,
+            spirit: 1,
+            available_points: STARTING_ATTRIBUTE_POINTS,
+        }
+    }
+}
+
+impl CharacterStats {
+    pub const fn value(&self, attribute: CharacterAttribute) -> u16 {
+        match attribute {
+            CharacterAttribute::Might => self.might,
+            CharacterAttribute::Finesse => self.finesse,
+            CharacterAttribute::Agility => self.agility,
+            CharacterAttribute::Vitality => self.vitality,
+            CharacterAttribute::Intellect => self.intellect,
+            CharacterAttribute::Spirit => self.spirit,
+        }
+    }
+
+    /// Classic Ragnarok cost for raising a base attribute from `value` to
+    /// `value + 1`. Attributes at the cap cannot be raised.
+    pub const fn attribute_point_cost(value: u16) -> Option<u32> {
+        if value >= MAX_ATTRIBUTE_VALUE {
+            return None;
+        }
+        Some(((value.saturating_sub(1) / 10) as u32) + 2)
+    }
+
+    pub const fn next_attribute_cost(&self, attribute: CharacterAttribute) -> Option<u32> {
+        Self::attribute_point_cost(self.value(attribute))
+    }
+
+    /// Classic Ragnarok reward for advancing from `level` to `level + 1`.
+    pub const fn attribute_points_for_next_base_level(level: u16) -> u32 {
+        (level / 5) as u32 + 3
+    }
+
+    pub fn can_spend_point(
+        &self,
+        attribute: CharacterAttribute,
+    ) -> Result<(), AttributeSpendError> {
+        let Some(required) = self.next_attribute_cost(attribute) else {
+            return Err(AttributeSpendError::AttributeAtMaximum);
+        };
+        if self.available_points < required {
+            return Err(AttributeSpendError::InsufficientPoints {
+                required,
+                available: self.available_points,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn spend_point(
+        &mut self,
+        attribute: CharacterAttribute,
+    ) -> Result<u16, AttributeSpendError> {
+        self.can_spend_point(attribute)?;
+        let cost = self
+            .next_attribute_cost(attribute)
+            .expect("validated attribute must have a cost");
+        let value = match attribute {
+            CharacterAttribute::Might => &mut self.might,
+            CharacterAttribute::Finesse => &mut self.finesse,
+            CharacterAttribute::Agility => &mut self.agility,
+            CharacterAttribute::Vitality => &mut self.vitality,
+            CharacterAttribute::Intellect => &mut self.intellect,
+            CharacterAttribute::Spirit => &mut self.spirit,
+        };
+        *value += 1;
+        self.available_points -= cost;
+        Ok(*value)
+    }
+
+    pub fn grant_base_levels(&mut self, previous_level: u16, levels_gained: u16) -> u32 {
+        let mut awarded = 0_u32;
+        for offset in 0..levels_gained {
+            let level = previous_level.saturating_add(offset);
+            awarded = awarded.saturating_add(Self::attribute_points_for_next_base_level(level));
+        }
+        self.available_points = self.available_points.saturating_add(awarded);
+        awarded
+    }
+
+    pub fn derived(&self, base_level: u16) -> DerivedCharacterStats {
+        let level = u32::from(base_level.max(1));
+        DerivedCharacterStats {
+            hit: level.saturating_add(u32::from(self.finesse)),
+            flee: level.saturating_add(u32::from(self.agility)),
+            max_health: 30_u32
+                .saturating_add(level.saturating_mul(5))
+                .saturating_add(u32::from(self.vitality).saturating_mul(5)),
+            max_mana: 5_u32
+                .saturating_add(level.saturating_mul(2))
+                .saturating_add(u32::from(self.intellect).saturating_mul(2))
+                .saturating_add(u32::from(self.spirit)),
+            physical_attack: level.saturating_add(u32::from(self.might).saturating_mul(2)),
+            magic_power: level
+                .saturating_add(u32::from(self.intellect).saturating_mul(2))
+                .saturating_add(u32::from(self.spirit)),
+            physical_defense: u32::from(self.vitality),
+            magic_defense: u32::from(self.spirit),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect, Serialize, Deserialize)]
+#[repr(u16)]
+pub enum EquipmentSlot {
+    HeadUpper = 0,
+    HeadMiddle = 1,
+    HeadLower = 2,
+    Armor = 3,
+    MainHand = 4,
+    OffHand = 5,
+    Garment = 6,
+    Shoes = 7,
+    AccessoryLeft = 8,
+    AccessoryRight = 9,
+}
+
+impl EquipmentSlot {
+    pub const ALL: [Self; 10] = [
+        Self::HeadUpper,
+        Self::HeadMiddle,
+        Self::HeadLower,
+        Self::Armor,
+        Self::MainHand,
+        Self::OffHand,
+        Self::Garment,
+        Self::Shoes,
+        Self::AccessoryLeft,
+        Self::AccessoryRight,
+    ];
+
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn from_index(index: u16) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::HeadUpper => "Upper Head",
+            Self::HeadMiddle => "Middle Head",
+            Self::HeadLower => "Lower Head",
+            Self::Armor => "Armor",
+            Self::MainHand => "Main Hand",
+            Self::OffHand => "Off Hand",
+            Self::Garment => "Garment",
+            Self::Shoes => "Shoes",
+            Self::AccessoryLeft => "Accessory 1",
+            Self::AccessoryRight => "Accessory 2",
+        }
+    }
+}
+
+#[derive(Component, Reflect, Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Equipment {
+    pub slots: [Option<ItemDefinitionId>; 10],
+}
+
+impl Equipment {
+    pub fn item(&self, slot: EquipmentSlot) -> Option<ItemDefinitionId> {
+        self.slots[slot.index()]
+    }
+
+    pub fn set(&mut self, slot: EquipmentSlot, item: Option<ItemDefinitionId>) {
+        self.slots[slot.index()] = item;
+    }
+}
+
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavePoint {
+    pub map_name: String,
+    pub position: [f32; 3],
+}
+
+#[cfg(test)]
+mod character_foundation_tests {
+    use super::*;
+
+    #[test]
+    fn equipment_exposes_all_ten_distinct_slots() {
+        let mut indices = EquipmentSlot::ALL.map(EquipmentSlot::index);
+        indices.sort_unstable();
+
+        assert_eq!(indices, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(Equipment::default().slots, [None; 10]);
+    }
+
+    #[test]
+    fn spending_an_attribute_point_is_validated_and_updates_the_value() {
+        let mut stats = CharacterStats {
+            available_points: 5,
+            ..default()
+        };
+
+        assert_eq!(stats.spend_point(CharacterAttribute::Might), Ok(2));
+        assert_eq!(stats.might, 2);
+        assert_eq!(stats.available_points, 3);
+
+        stats.might = 11;
+        assert_eq!(stats.spend_point(CharacterAttribute::Might), Ok(12));
+        assert_eq!(stats.available_points, 0);
+        assert_eq!(
+            stats.spend_point(CharacterAttribute::Might),
+            Err(AttributeSpendError::InsufficientPoints {
+                required: 3,
+                available: 0,
+            })
+        );
+
+        stats.might = MAX_ATTRIBUTE_VALUE;
+        assert_eq!(
+            stats.spend_point(CharacterAttribute::Might),
+            Err(AttributeSpendError::AttributeAtMaximum)
+        );
+        assert_eq!(stats.available_points, 0);
+    }
+
+    #[test]
+    fn base_levels_grant_points_and_attributes_calculate_derived_stats() {
+        let mut stats = CharacterStats::default();
+        assert_eq!(stats.available_points, STARTING_ATTRIBUTE_POINTS);
+        assert_eq!(stats.grant_base_levels(4, 2), 7);
+        assert_eq!(stats.available_points, STARTING_ATTRIBUTE_POINTS + 7);
+        assert_eq!(
+            stats.derived(1),
+            DerivedCharacterStats {
+                hit: 2,
+                flee: 2,
+                max_health: 40,
+                max_mana: 10,
+                physical_attack: 3,
+                magic_power: 4,
+                physical_defense: 1,
+                magic_defense: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn classic_attribute_cost_and_level_reward_boundaries_match_ragnarok() {
+        assert_eq!(CharacterStats::attribute_point_cost(1), Some(2));
+        assert_eq!(CharacterStats::attribute_point_cost(10), Some(2));
+        assert_eq!(CharacterStats::attribute_point_cost(11), Some(3));
+        assert_eq!(CharacterStats::attribute_point_cost(90), Some(10));
+        assert_eq!(CharacterStats::attribute_point_cost(91), Some(11));
+        assert_eq!(CharacterStats::attribute_point_cost(99), None);
+
+        assert_eq!(CharacterStats::attribute_points_for_next_base_level(1), 3);
+        assert_eq!(CharacterStats::attribute_points_for_next_base_level(4), 3);
+        assert_eq!(CharacterStats::attribute_points_for_next_base_level(5), 4);
+        assert_eq!(CharacterStats::attribute_points_for_next_base_level(94), 21);
+        assert_eq!(CharacterStats::attribute_points_for_next_base_level(98), 22);
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, Copy, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Pos(pub i32, pub i32);
@@ -138,6 +501,7 @@ pub struct Billboard;
 pub enum Animation {
     Idle,
     Walking,
+    Sitting,
     Attacking {
         entity: Entity,
         enemy: Entity,

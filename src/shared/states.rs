@@ -7,6 +7,7 @@ pub enum ClientState {
     Setup,
     InMenu,
     InGame,
+    ConnectionLost,
 }
 
 #[derive(States, Default, Hash, Debug, PartialEq, Clone, Eq)]

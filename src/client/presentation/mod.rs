@@ -1,14 +1,22 @@
 pub mod action_bar;
 pub mod animations;
 pub mod casting;
+pub mod character_status;
+pub mod connection_lost;
 pub mod damage_numbers;
+pub mod death;
+pub mod enemy_fade;
+pub mod equipment;
 pub mod health;
 pub mod health_bars;
 pub mod inventory;
+pub mod job_animations;
 pub mod menu;
 pub mod music;
 pub mod progression_hud;
+pub mod skill_tree;
 pub mod spells;
+pub mod ui_drag;
 pub mod water_material;
 // Preserved prototype; enable only while actively testing it.
 // pub mod water_experiment;

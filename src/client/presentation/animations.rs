@@ -11,6 +11,9 @@ use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraSystemSet};
 use bevy_sprite3d::*;
 
 const ATLAS_FRAMES_PER_DIRECTION: usize = 8;
+const SITTING_ATLAS_COLUMN: usize = ATLAS_FRAMES_PER_DIRECTION - 1;
+const SITTING_SPRITE_WIDTH_SCALE: f32 = 0.92;
+const SITTING_SPRITE_HEIGHT_SCALE: f32 = 0.68;
 const DIRECTION_ANGLE: f32 = std::f32::consts::TAU / 8.0;
 const MIN_BILLBOARD_PITCH_COSINE: f32 = 0.5;
 
@@ -48,7 +51,7 @@ fn facing_world_direction(facing: u8) -> Vec3 {
     world_direction_from_facing(facing)
 }
 
-fn atlas_direction(camera: &Transform, world_direction: Vec3) -> u8 {
+pub(crate) fn atlas_direction(camera: &Transform, world_direction: Vec3) -> u8 {
     let movement = Vec3::new(world_direction.x, 0.0, world_direction.z).normalize_or_zero();
     if movement == Vec3::ZERO {
         return 0;
@@ -63,7 +66,7 @@ fn atlas_direction(camera: &Transform, world_direction: Vec3) -> u8 {
     octant.rem_euclid(8) as u8
 }
 
-fn animation_world_direction(
+pub(crate) fn animation_world_direction(
     animation: &Animation,
     velocity: Vec3,
     last_direction: Option<Vec3>,
@@ -81,14 +84,29 @@ fn animation_world_direction(
     }
 }
 
-fn align_billboard_to_camera(sprite_transform: &mut Transform, yaw: f32, pitch: f32) {
+fn align_billboard_to_camera(
+    sprite_transform: &mut Transform,
+    yaw: f32,
+    pitch: f32,
+    sitting: bool,
+) {
     // Keep the quad upright so it cannot tilt into nearby world geometry. The
     // inverse-cosine scale compensates for the vertical foreshortening caused by
     // camera pitch while retaining a cylindrical billboard.
     let pitch_correction = pitch.cos().abs().max(MIN_BILLBOARD_PITCH_COSINE).recip();
+    let width_scale = if sitting {
+        SITTING_SPRITE_WIDTH_SCALE
+    } else {
+        1.0
+    };
+    let height_scale = if sitting {
+        SITTING_SPRITE_HEIGHT_SCALE
+    } else {
+        1.0
+    };
 
     sprite_transform.rotation = Quat::from_rotation_y(yaw);
-    sprite_transform.scale = Vec3::new(1.0, pitch_correction, 1.0);
+    sprite_transform.scale = Vec3::new(width_scale, pitch_correction * height_scale, 1.0);
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -131,12 +149,15 @@ impl Plugin for AnimationsPlugin {
 
         fn billboard(
             camera_query: Query<&PanOrbitCamera, (With<Camera3d>, Without<Billboard>)>,
-            mut entities_query: Query<&mut Transform, With<Billboard>>,
+            mut entities_query: Query<(&mut Transform, Option<&ChildOf>), With<Billboard>>,
+            sitting_parents: Query<(), With<Sitting>>,
         ) {
             if let Ok(pan_camera) = camera_query.single() {
                 if let (Some(yaw), Some(pitch)) = (pan_camera.yaw, pan_camera.pitch) {
-                    for mut entity_transform in entities_query.iter_mut() {
-                        align_billboard_to_camera(&mut entity_transform, yaw, pitch);
+                    for (mut entity_transform, parent) in entities_query.iter_mut() {
+                        let sitting =
+                            parent.is_some_and(|parent| sitting_parents.contains(parent.parent()));
+                        align_billboard_to_camera(&mut entity_transform, yaw, pitch, sitting);
                     }
                 }
             }
@@ -235,13 +256,16 @@ impl Plugin for AnimationsPlugin {
             mut commands: Commands,
             time: Res<Time>,
             chaski: Res<ChaskiAssets>,
-            mut q_parent: Query<(
-                &mut AnimationTimer,
-                Ref<Facing>,
-                &GameVelocity,
-                &mut Animation,
-                Option<&mut LastAnimationDirection>,
-            )>,
+            mut q_parent: Query<
+                (
+                    &mut AnimationTimer,
+                    Ref<Facing>,
+                    &GameVelocity,
+                    &mut Animation,
+                    Option<&mut LastAnimationDirection>,
+                ),
+                Without<crate::client::presentation::job_animations::JobAnimatedPlayer>,
+            >,
             mut q_walking_child: Query<
                 (&ChildOf, &mut Sprite, &mut Visibility),
                 (With<WalkingSpriteVisual>, Without<AttackSpriteVisual>),
@@ -398,11 +422,22 @@ impl Plugin for AnimationsPlugin {
                         walking_sprite.flip_x = false;
                     }
 
+                    if matches!(*animation, Animation::Sitting) {
+                        if let Some(atlas) = &mut walking_sprite.texture_atlas {
+                            atlas.index =
+                                row_index * ATLAS_FRAMES_PER_DIRECTION + SITTING_ATLAS_COLUMN;
+                        }
+                        continue;
+                    }
+
                     if let Some(atlas) = &mut walking_sprite.texture_atlas {
                         let current_row = atlas.index / ATLAS_FRAMES_PER_DIRECTION;
                         if current_row != row_index {
                             let col_index = atlas.index % ATLAS_FRAMES_PER_DIRECTION;
                             atlas.index = col_index + row_index * ATLAS_FRAMES_PER_DIRECTION;
+                        }
+                        if atlas.index % ATLAS_FRAMES_PER_DIRECTION == SITTING_ATLAS_COLUMN {
+                            atlas.index = row_index * ATLAS_FRAMES_PER_DIRECTION;
                         }
                     }
 
@@ -504,6 +539,16 @@ mod tests {
     }
 
     #[test]
+    fn sitting_preserves_the_last_precise_movement_direction() {
+        let last_direction = Vec3::new(1.0, 0.0, -1.0).normalize();
+
+        assert_eq!(
+            animation_world_direction(&Animation::Sitting, Vec3::ZERO, Some(last_direction), 3,),
+            last_direction
+        );
+    }
+
+    #[test]
     fn stored_facing_values_round_trip_through_world_directions() {
         let camera = camera_at(Vec3::new(0.0, 10.0, 10.0));
 
@@ -541,7 +586,7 @@ mod tests {
             let yaw = 35.0_f32.to_radians();
             let mut sprite_transform = Transform::from_scale(Vec3::new(1.0, 2.5, 1.0));
 
-            align_billboard_to_camera(&mut sprite_transform, yaw, pitch);
+            align_billboard_to_camera(&mut sprite_transform, yaw, pitch, false);
 
             assert!((sprite_transform.scale.y * pitch.cos() - 1.0).abs() < 1e-5);
             assert_eq!(sprite_transform.scale.x, 1.0);
@@ -554,8 +599,25 @@ mod tests {
     fn billboard_pitch_correction_is_bounded_at_extreme_angles() {
         let mut sprite_transform = Transform::default();
 
-        align_billboard_to_camera(&mut sprite_transform, 0.0, std::f32::consts::FRAC_PI_2);
+        align_billboard_to_camera(
+            &mut sprite_transform,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            false,
+        );
 
         assert_eq!(sprite_transform.scale.y, MIN_BILLBOARD_PITCH_COSINE.recip());
+    }
+
+    #[test]
+    fn sitting_pose_is_shorter_but_keeps_the_billboard_upright() {
+        let mut sprite_transform = Transform::default();
+
+        align_billboard_to_camera(&mut sprite_transform, 0.4, 0.0, true);
+
+        assert_eq!(sprite_transform.scale.x, SITTING_SPRITE_WIDTH_SCALE);
+        assert_eq!(sprite_transform.scale.y, SITTING_SPRITE_HEIGHT_SCALE);
+        assert_eq!(sprite_transform.scale.z, 1.0);
+        assert!((sprite_transform.rotation * Vec3::Y).dot(Vec3::Y) > 1.0 - 1e-5);
     }
 }

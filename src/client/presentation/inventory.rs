@@ -6,22 +6,26 @@ use std::f32::consts::TAU;
 
 use crate::{
     client::{
-        presentation::action_bar::{ActionBarBindings, ActionBarState},
+        presentation::{
+            action_bar::{ActionBarBindings, ActionBarState},
+            ui_drag::DraggableUi,
+        },
         state::ControlledPlayer,
     },
     shared::{
+        gameplay::action_bar::ActionBarBinding,
+        gameplay::components::{Equipment, EquipmentSlot},
         gameplay::items::{
-            item_definition, Inventory, ItemDefinitionId, ITEM_DEFINITIONS, LUCKY_CLOVER, PIG_MEAT,
-            RED_HERB,
+            equipment_bonus_summary, item_definition, Inventory, ItemDefinitionId,
+            APPRENTICE_STAFF, BASIC_SWORD, CLOTH_ARMOR, ITEM_DEFINITIONS, LUCKY_CLOVER, PIG_MEAT,
+            RED_HERB, SIMPLE_BOOTS,
         },
         network::messages::PlayerCommand,
         states::ClientState,
     },
 };
 
-const INVENTORY_PANEL_WIDTH: f32 = 188.0;
-const INVENTORY_PANEL_MAX_HEIGHT: f32 = 120.0;
-const INVENTORY_PANEL_MARGIN: f32 = 12.0;
+const INVENTORY_PANEL_WIDTH: f32 = 280.0;
 const DOUBLE_CLICK_SECONDS: f64 = 0.35;
 const GROUND_ITEM_ARC_HEIGHT: f32 = 1.5;
 const GROUND_ITEM_ARC_SECONDS: f32 = 0.7;
@@ -34,6 +38,9 @@ struct InventoryRow(ItemDefinitionId);
 
 #[derive(Component)]
 struct InventoryQuantityText(ItemDefinitionId);
+
+#[derive(Component)]
+struct InventoryDetailsText;
 
 #[derive(Component)]
 struct InventoryDragGhost;
@@ -65,15 +72,6 @@ pub(crate) struct InventoryUiState {
     last_click: Option<(ItemDefinitionId, f64)>,
 }
 
-impl InventoryUiState {
-    pub(crate) fn captures_pointer(&self, pointer_position: Vec2, window_size: Vec2) -> bool {
-        pointer_position.x >= window_size.x - INVENTORY_PANEL_MARGIN - INVENTORY_PANEL_WIDTH
-            && pointer_position.x <= window_size.x - INVENTORY_PANEL_MARGIN
-            && pointer_position.y >= INVENTORY_PANEL_MARGIN
-            && pointer_position.y <= INVENTORY_PANEL_MARGIN + INVENTORY_PANEL_MAX_HEIGHT
-    }
-}
-
 pub(crate) struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
@@ -86,6 +84,7 @@ impl Plugin for InventoryPlugin {
                     inventory_item_interactions,
                     update_inventory_drag.after(inventory_item_interactions),
                     update_inventory_panel,
+                    update_inventory_item_details,
                     animate_ground_item_drops,
                 )
                     .run_if(in_state(ClientState::InGame)),
@@ -120,6 +119,10 @@ pub(crate) fn item_color(item_id: ItemDefinitionId) -> Color {
         PIG_MEAT => Color::srgb(0.86, 0.38, 0.34),
         RED_HERB => Color::srgb(0.82, 0.12, 0.16),
         LUCKY_CLOVER => Color::srgb(0.18, 0.75, 0.25),
+        BASIC_SWORD => Color::srgb(0.72, 0.75, 0.82),
+        CLOTH_ARMOR => Color::srgb(0.45, 0.58, 0.76),
+        SIMPLE_BOOTS => Color::srgb(0.48, 0.32, 0.20),
+        APPRENTICE_STAFF => Color::srgb(0.52, 0.24, 0.76),
         _ => Color::srgb(0.82, 0.82, 0.86),
     }
 }
@@ -143,6 +146,7 @@ fn spawn_inventory_panel(mut commands: Commands) {
             BorderColor::all(Color::srgba(0.60, 0.64, 0.72, 0.96)),
             GlobalZIndex(295),
             Pickable::IGNORE,
+            DraggableUi::header(32.0),
             InventoryPanelRoot,
             Name::new("Inventory Panel"),
         ))
@@ -158,6 +162,14 @@ fn spawn_inventory_panel(mut commands: Commands) {
             ));
 
             for definition in ITEM_DEFINITIONS {
+                let item_label = if definition.consumable.is_some() {
+                    format!("{} [Use]", definition.name)
+                } else if !definition.equipment_slots.is_empty() {
+                    let bonuses = equipment_bonus_summary(definition.bonuses);
+                    format!("{} [Equip] ({bonuses})", definition.name)
+                } else {
+                    definition.name.to_owned()
+                };
                 panel
                     .spawn((
                         Node {
@@ -187,9 +199,9 @@ fn spawn_inventory_panel(mut commands: Commands) {
                             Pickable::IGNORE,
                         ));
                         row.spawn((
-                            Text::new(definition.name),
+                            Text::new(item_label),
                             TextFont {
-                                font_size: FontSize::Px(11.0),
+                                font_size: FontSize::Px(10.0),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.91, 0.92, 0.95)),
@@ -211,7 +223,79 @@ fn spawn_inventory_panel(mut commands: Commands) {
                         ));
                     });
             }
+
+            panel.spawn((
+                Text::new("Hover an item to see its equipment comparison."),
+                TextFont {
+                    font_size: FontSize::Px(10.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.64, 0.72, 0.84)),
+                Node {
+                    min_height: Val::Px(48.0),
+                    margin: UiRect::top(Val::Px(3.0)),
+                    ..default()
+                },
+                Pickable::IGNORE,
+                InventoryDetailsText,
+            ));
         });
+}
+
+fn inventory_item_details(item_id: ItemDefinitionId, equipment: &Equipment) -> String {
+    let Some(definition) = item_definition(item_id) else {
+        return format!("Unknown item #{}", item_id.0);
+    };
+    let bonuses = equipment_bonus_summary(definition.bonuses);
+    let mut details = if bonuses.is_empty() {
+        definition.name.to_owned()
+    } else {
+        format!("{}: {bonuses}", definition.name)
+    };
+    if definition.equipment_slots.is_empty() {
+        return details;
+    }
+
+    let comparison_slot = definition
+        .equipment_slots
+        .iter()
+        .copied()
+        .find(|slot| equipment.item(*slot).is_none())
+        .or_else(|| definition.equipment_slots.first().copied());
+    if let Some(slot) = comparison_slot {
+        let comparison = equipment.item(slot).and_then(item_definition);
+        if let Some(comparison) = comparison {
+            let equipped_bonuses = equipment_bonus_summary(comparison.bonuses);
+            details.push_str(&format!(
+                "\n{} currently: {} ({equipped_bonuses})",
+                slot.name(),
+                comparison.name
+            ));
+        } else {
+            details.push_str(&format!("\n{} currently: Empty", slot.name()));
+        }
+    }
+    details
+}
+
+fn update_inventory_item_details(
+    rows: Query<(&InventoryRow, &Interaction)>,
+    equipment: Query<&Equipment, With<ControlledPlayer>>,
+    mut details: Query<&mut Text, With<InventoryDetailsText>>,
+) {
+    let Ok(equipment) = equipment.single() else {
+        return;
+    };
+    let hovered = rows.iter().find_map(|(row, interaction)| {
+        matches!(*interaction, Interaction::Hovered | Interaction::Pressed).then_some(row.0)
+    });
+    let text = hovered.map_or_else(
+        || "Hover an item to see its equipment comparison.".to_owned(),
+        |item_id| inventory_item_details(item_id, equipment),
+    );
+    for mut details in &mut details {
+        details.0.clone_from(&text);
+    }
 }
 
 fn inventory_item_interactions(
@@ -237,17 +321,27 @@ fn inventory_item_interactions(
         let Some(definition) = item_definition(row.0) else {
             continue;
         };
-        if definition.consumable.is_none() {
-            continue;
-        }
 
         let now = time.elapsed_secs_f64();
-        if state.last_click.is_some_and(|(item_id, clicked_at)| {
-            item_id == row.0 && now - clicked_at <= DOUBLE_CLICK_SECONDS
-        }) {
-            player_commands.write(PlayerCommand::UseItem { item_id: row.0 });
+        let can_activate =
+            definition.consumable.is_some() || !definition.equipment_slots.is_empty();
+        let double_clicked = can_activate
+            && state.last_click.is_some_and(|(item_id, clicked_at)| {
+                item_id == row.0 && now - clicked_at <= DOUBLE_CLICK_SECONDS
+            });
+        if double_clicked {
+            if definition.consumable.is_some() {
+                player_commands.write(PlayerCommand::UseItem { item_id: row.0 });
+            } else {
+                player_commands.write(PlayerCommand::EquipItem { item_id: row.0 });
+            }
             state.last_click = None;
-        } else {
+            if let Some(ghost) = state.drag_ghost.take() {
+                commands.entity(ghost).try_despawn();
+            }
+            state.dragging = None;
+            continue;
+        } else if can_activate {
             state.last_click = Some((row.0, now));
         }
 
@@ -287,6 +381,7 @@ fn update_inventory_drag(
     mut bindings: ResMut<ActionBarBindings>,
     mut state: ResMut<InventoryUiState>,
     mut ghosts: Query<&mut Node, With<InventoryDragGhost>>,
+    mut player_commands: MessageWriter<PlayerCommand>,
     mut commands: Commands,
 ) {
     let Some(item_id) = state.dragging else {
@@ -310,7 +405,12 @@ fn update_inventory_drag(
 
     if let Some(pointer) = pointer {
         if let Some(slot_index) = action_bar.slot_at(pointer) {
-            bindings.bind_item(slot_index, item_id);
+            if bindings.bind_item(slot_index, item_id) {
+                player_commands.write(PlayerCommand::SetActionBarSlot {
+                    slot_index: slot_index as u8,
+                    binding: Some(ActionBarBinding::Item(item_id)),
+                });
+            }
         }
     }
     if let Some(ghost) = state.drag_ghost.take() {
@@ -361,16 +461,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inventory_panel_captures_only_its_screen_region() {
-        let state = InventoryUiState::default();
-        let window = Vec2::new(720.0, 720.0);
-
-        assert!(state.captures_pointer(Vec2::new(600.0, 20.0), window));
-        assert!(!state.captures_pointer(Vec2::new(500.0, 20.0), window));
-        assert!(!state.captures_pointer(Vec2::new(600.0, 200.0), window));
-    }
-
-    #[test]
     fn new_ground_items_begin_at_the_authoritative_landing_point() {
         let landing = Vec3::new(2.0, 0.06, -3.0);
         let (transform, animation) = falling_ground_item(landing);
@@ -384,5 +474,15 @@ mod tests {
         assert_eq!(ground_item_arc_height(0.0), 0.0);
         assert_eq!(ground_item_arc_height(0.5), GROUND_ITEM_ARC_HEIGHT);
         assert_eq!(ground_item_arc_height(1.0), 0.0);
+    }
+
+    #[test]
+    fn item_details_compare_equipment_with_the_compatible_slot() {
+        let mut equipment = Equipment::default();
+        equipment.set(EquipmentSlot::MainHand, Some(BASIC_SWORD));
+
+        let details = inventory_item_details(APPRENTICE_STAFF, &equipment);
+        assert!(details.contains("Apprentice Staff: +5 Magic, +5 SP"));
+        assert!(details.contains("Main Hand currently: Basic Sword (+5 ATK)"));
     }
 }

@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
 use crate::shared::gameplay::components::Monster;
+use crate::shared::gameplay::entities::Player;
 use crate::shared::states::ClientState;
 
 const DAMAGE_NUMBER_LIFETIME: f32 = 0.9;
@@ -44,30 +45,47 @@ impl Plugin for DamageNumbersPlugin {
     }
 }
 
+fn damage_number_color(is_player_damage: bool) -> Color {
+    if is_player_damage {
+        Color::srgb(1.0, 0.08, 0.04)
+    } else {
+        Color::srgb(1.0, 0.88, 0.32)
+    }
+}
+
+fn damage_number_display(amount: i32, is_player_damage: bool) -> (String, Color) {
+    if amount == 0 {
+        ("MISS".into(), Color::srgb(0.72, 0.82, 0.95))
+    } else {
+        (amount.to_string(), damage_number_color(is_player_damage))
+    }
+}
+
 fn spawn_damage_number(
     trigger: On<DamageNumberEvent>,
     mut commands: Commands,
-    monsters: Query<&GlobalTransform, With<Monster>>,
+    owners: Query<(&GlobalTransform, Option<&Player>), Or<(With<Monster>, With<Player>)>>,
     mut sequence: ResMut<DamageNumberSequence>,
 ) {
     let event = trigger.event();
-    let Ok(monster_transform) = monsters.get(event.entity) else {
+    let Ok((owner_transform, player)) = owners.get(event.entity) else {
         return;
     };
-    if event.amount <= 0 {
+    if event.amount < 0 {
         return;
     }
+    let (display, display_color) = damage_number_display(event.amount, player.is_some());
 
     let horizontal_offset = DAMAGE_NUMBER_SPREAD[sequence.0 % DAMAGE_NUMBER_SPREAD.len()];
     sequence.0 = sequence.0.wrapping_add(1);
 
     commands.spawn((
-        Text::new(event.amount.to_string()),
+        Text::new(display),
         TextFont {
             font_size: FontSize::Px(DAMAGE_NUMBER_FONT_SIZE),
             ..default()
         },
-        TextColor(Color::srgb(1.0, 0.88, 0.32)),
+        TextColor(display_color),
         TextShadow {
             offset: Vec2::new(2.0, 2.0),
             color: Color::srgba(0.08, 0.01, 0.01, 0.95),
@@ -83,7 +101,7 @@ fn spawn_damage_number(
         Pickable::IGNORE,
         FloatingDamageNumber {
             owner: event.entity,
-            world_anchor: monster_transform.translation() + Vec3::Y * DAMAGE_NUMBER_WORLD_HEIGHT,
+            world_anchor: owner_transform.translation() + Vec3::Y * DAMAGE_NUMBER_WORLD_HEIGHT,
             elapsed: 0.0,
             horizontal_offset,
         },
@@ -189,5 +207,19 @@ mod tests {
         assert_eq!(middle_alpha, 1.0);
         assert_eq!(final_alpha, 0.0);
         assert!(final_rise > middle_rise);
+    }
+
+    #[test]
+    fn damage_to_players_is_red() {
+        assert_eq!(damage_number_color(true), Color::srgb(1.0, 0.08, 0.04));
+        assert_eq!(damage_number_color(false), Color::srgb(1.0, 0.88, 0.32));
+    }
+
+    #[test]
+    fn zero_damage_is_displayed_as_a_miss() {
+        assert_eq!(
+            damage_number_display(0, false),
+            ("MISS".into(), Color::srgb(0.72, 0.82, 0.95))
+        );
     }
 }

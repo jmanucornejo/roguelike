@@ -11,6 +11,7 @@ pub enum HealthChangeType {
 pub enum DamageOrigin {
     BasicAttack,
     DirectSpell,
+    AreaSpell,
 }
 
 #[derive(Event, Debug)]

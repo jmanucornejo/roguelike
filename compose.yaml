@@ -1,37 +1,71 @@
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: tribute-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: roguelike
-      MYSQL_USER: roguelike
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root-change-me}
-    ports:
-      - "3306:3306"
-    volumes:
-      - ./docker/mysql:/var/lib/mysql
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "mysqladmin ping -h 127.0.0.1 --silent",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 20s
-
-  phpmyadmin:
-    image: phpmyadmin:5.2.2
-    container_name: tribute-phpmyadmin
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: tribute-server:latest
     restart: unless-stopped
     depends_on:
       mysql:
         condition: service_healthy
     environment:
-      PMA_HOST: mysql
-      PMA_PORT: 3306
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      ASSET_ROOT: /app/assets
+      SERVER_BIND_ADDR: 0.0.0.0:42069
+      SERVER_PUBLIC_ADDR: ${SERVER_PUBLIC_ADDR:?Set SERVER_PUBLIC_ADDR to the public IPv4 and UDP port}
+      SERVER_MAX_CLIENTS: ${SERVER_MAX_CLIENTS:-128}
+      TOKEN_BIND_ADDR: 0.0.0.0:8080
+      NETCODE_PRIVATE_KEY: ${NETCODE_PRIVATE_KEY:?Generate a 32-byte hexadecimal private key}
+      RUST_LOG: ${RUST_LOG:-info,rechannel=warn}
     ports:
-      - "${PHPMYADMIN_PORT:-8080}:80"
+      - "42069:42069/udp"
+    networks:
+      - public
+      - database
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: roguelike
+      MYSQL_USER: roguelike
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - database
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      GAME_DOMAIN: ${GAME_DOMAIN:?Set GAME_DOMAIN in .env}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - public
+
+volumes:
+  mysql-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  public:
+  database:
+    internal: true

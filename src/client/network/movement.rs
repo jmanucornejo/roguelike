@@ -179,11 +179,16 @@ fn predict_controlled_player(
     for (transform, mut prediction, mut velocity, mut controller, output) in &mut players {
         let mut movement = Vec3::ZERO;
 
-        // Match the authoritative controller: keep applying gravity until Rapier says
-        // the capsule is grounded. Horizontal movement is then projected onto slopes.
-        if !output.map(|output| output.grounded).unwrap_or(false) {
-            movement.y = CHARACTER_GRAVITY * delta_seconds;
-        }
+        // Match the authoritative controller and keep the request pointing
+        // downward while grounded. Rapier requires this for snap-to-ground to
+        // follow descending slopes without alternating between grounded and
+        // airborne frames.
+        let vertical_speed = if output.map(|output| output.grounded).unwrap_or(false) {
+            CHARACTER_GROUND_STICK_SPEED
+        } else {
+            CHARACTER_GRAVITY
+        };
+        movement.y = vertical_speed * delta_seconds;
 
         if let Some(destination) = prediction.destination {
             let current = transform.translation;

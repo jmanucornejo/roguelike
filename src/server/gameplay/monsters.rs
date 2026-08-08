@@ -12,9 +12,7 @@ use crate::shared::gameplay::events::DeathEvent;
 use crate::shared::gameplay::progression::ExperienceReward;
 use crate::shared::states::ServerState;
 use bevy::prelude::*;
-use bevy_asset_loader::prelude::*;
 use bevy_rapier3d::prelude::*;
-use bevy_sprite3d::*;
 use rand::Rng;
 use std::collections::HashSet;
 
@@ -25,13 +23,22 @@ const MAP_MAX_CELL: i32 = 150;
 const MONSTER_SPAWN_ATTEMPTS: usize = 128;
 const MAX_RESPAWN_ATTEMPTS_PER_UPDATE: usize = 4;
 const MONSTER_COLLIDER_HALF_HEIGHT: f32 = 1.0;
-const TERRAIN_RAY_ORIGIN_Y: f32 = 128.0;
-const TERRAIN_RAY_DISTANCE: f32 = 256.0;
+const MONSTER_SPAWN_ORIGIN_Y: f32 = 128.0;
+const MONSTER_SPAWN_CAST_DISTANCE: f32 = 256.0;
+const MONSTER_SPAWN_CLEARANCE: f32 = 0.05;
+const MONSTER_MAX_NEIGHBOR_HEIGHT_DELTA: f32 = 0.75;
 const ROAM_MIN_DISTANCE: i32 = 2;
 const ROAM_VISION_RANGE: i32 = 8;
 const ROAM_DESTINATION_ATTEMPTS: usize = 32;
 const IDLE_MIN_SECONDS: f32 = 5.0;
 const IDLE_MAX_SECONDS: f32 = 10.0;
+const STARTING_PIG_MAX_HEALTH: u32 = 75;
+const STARTING_PIG_ATTACK_PERIOD_SECONDS: f32 = 0.8;
+
+/// Marks the beginner population so combat can apply map-specific tuning
+/// without weakening monsters spawned on later maps.
+#[derive(Component)]
+pub(super) struct StartingMapMonster;
 
 #[derive(Clone, Copy, Debug)]
 struct MonsterPopulationDefinition {
@@ -55,14 +62,14 @@ const CURRENT_MAP_POPULATION: [MonsterPopulationDefinition; 3] = [
     MonsterPopulationDefinition {
         kind: MonsterKind::Pig,
         aggression: MonsterAggression::Aggressive,
-        target_count: 1,
+        target_count: 5,
         respawn_min_seconds: 0,
         respawn_max_seconds: 60,
     },
     MonsterPopulationDefinition {
         kind: MonsterKind::Pig,
         aggression: MonsterAggression::SpellReactive,
-        target_count: 1,
+        target_count: 5,
         respawn_min_seconds: 0,
         respawn_max_seconds: 60,
     },
@@ -70,23 +77,6 @@ const CURRENT_MAP_POPULATION: [MonsterPopulationDefinition; 3] = [
 
 #[derive(Component)]
 pub struct MonsterParent;
-
-#[derive(AssetCollection, Resource, Debug)]
-struct TestAssets {
-    #[asset(texture_atlas_layout(
-        tile_size_x = 24,
-        tile_size_y = 24,
-        columns = 7,
-        rows = 1,
-        padding_x = 0,
-        padding_y = 0,
-        offset_x = 0,
-        offset_y = 0
-    ))]
-    layout: Handle<TextureAtlasLayout>,
-    #[asset(path = "gabe-idle-run.png")]
-    sprite: Handle<Image>,
-}
 
 #[derive(Debug, PartialEq, Component, Clone)]
 pub struct MonsterMovement {
@@ -117,12 +107,9 @@ struct MonsterPopulation {
 impl Plugin for MonstersPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MonsterPopulation>()
-            .add_systems(OnEnter(ServerState::Initializing), spawn_monster_parent)
-            .add_plugins(Sprite3dPlugin)
-            .add_loading_state(
-                LoadingState::new(ServerState::Initializing)
-                    .load_collection::<TestAssets>()
-                    .continue_to_state(ServerState::InGame),
+            .add_systems(
+                OnEnter(ServerState::Initializing),
+                (spawn_monster_parent, finish_server_initialization).chain(),
             )
             .add_systems(
                 Update,
@@ -140,41 +127,32 @@ impl Plugin for MonstersPlugin {
 fn spawn_monster_parent(mut commands: Commands) {
     commands.spawn((
         Transform::default(),
-        Visibility::default(),
         MonsterParent,
         Name::new("Monster Parent"),
     ));
 }
 
+fn finish_server_initialization(mut next_state: ResMut<NextState<ServerState>>) {
+    next_state.set(ServerState::InGame);
+}
+
 fn spawn_monster(
     trigger: On<SpawnMonster>,
     parent: Query<Entity, With<MonsterParent>>,
-    assets: Res<TestAssets>,
     mut commands: Commands,
 ) {
     let spawn = trigger.event();
-    let texture_atlas = TextureAtlas {
-        layout: assets.layout.clone(),
-        index: 3,
-    };
-    let (name, max_health): (&str, u32) = match spawn.kind {
-        MonsterKind::Pig => ("Pig", 100),
-        MonsterKind::Orc => ("Orc", 180),
+    let (name, max_health, attack_period): (&str, u32, f32) = match spawn.kind {
+        MonsterKind::Pig => (
+            "Pig",
+            STARTING_PIG_MAX_HEALTH,
+            STARTING_PIG_ATTACK_PERIOD_SECONDS,
+        ),
+        MonsterKind::Orc => ("Orc", 140, 0.7),
     };
 
     let mut monster_commands = commands.spawn((
         Transform::from_translation(spawn.translation),
-        Sprite3d {
-            pixels_per_metre: 32.0,
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        },
-        Sprite {
-            image: assets.sprite.clone(),
-            texture_atlas: Some(texture_atlas),
-            ..default()
-        },
         Monster {
             hp: max_health as i32,
             kind: spawn.kind,
@@ -198,6 +176,7 @@ fn spawn_monster(
             rotation: Facing(0),
         },
         NearestNeighbourComponent,
+        StartingMapMonster,
     ));
     monster_commands.insert((
         spawn.aggression,
@@ -205,7 +184,7 @@ fn spawn_monster(
             max: max_health,
             current: max_health,
         },
-        AttackSpeed(0.5),
+        AttackSpeed(attack_period),
         ExperienceReward::for_monster_kind(&spawn.kind),
         LockedAxes::ROTATION_LOCKED,
         ActiveCollisionTypes::KINEMATIC_STATIC,
@@ -305,17 +284,24 @@ fn maintain_monster_population(
             index += 1;
             continue;
         }
-        let mut surface_height = |cell: Pos| {
-            let origin = Vec3::new(cell.0 as f32, TERRAIN_RAY_ORIGIN_Y, cell.1 as f32);
+        let monster_collider = Collider::capsule_y(0.5, 0.5);
+        let mut collider_placement = |cell: Pos| {
+            let origin = Vec3::new(cell.0 as f32, MONSTER_SPAWN_ORIGIN_Y, cell.1 as f32);
             rapier_context
-                .cast_ray(
+                .cast_shape(
                     origin,
+                    Quat::IDENTITY,
                     Vec3::NEG_Y,
-                    TERRAIN_RAY_DISTANCE,
-                    true,
+                    monster_collider.raw.as_ref(),
+                    ShapeCastOptions {
+                        max_time_of_impact: MONSTER_SPAWN_CAST_DISTANCE,
+                        target_distance: MONSTER_SPAWN_CLEARANCE,
+                        stop_at_penetration: true,
+                        compute_impact_geometry_on_penetration: true,
+                    },
                     QueryFilter::only_fixed().exclude_sensors(),
                 )
-                .map(|(_, time_of_impact)| TERRAIN_RAY_ORIGIN_Y - time_of_impact)
+                .map(|(_, hit)| origin + Vec3::NEG_Y * hit.time_of_impact)
         };
         let translation = if let Some(player_translation) = preferred_player {
             random_valid_spawn_translation_near(
@@ -323,10 +309,10 @@ fn maintain_monster_population(
                 &occupied,
                 world_cell(player_translation),
                 &mut rng,
-                &mut surface_height,
+                &mut collider_placement,
             )
         } else {
-            random_valid_spawn_translation(&map, &occupied, &mut rng, &mut surface_height)
+            random_valid_spawn_translation(&map, &occupied, &mut rng, &mut collider_placement)
         };
         let Some(translation) = translation else {
             // Async terrain colliders may not be ready yet. Keep the completed
@@ -448,7 +434,7 @@ fn random_valid_spawn_translation(
     map: &Map,
     occupied: &HashSet<Pos>,
     rng: &mut impl Rng,
-    mut surface_height: impl FnMut(Pos) -> Option<f32>,
+    mut collider_placement: impl FnMut(Pos) -> Option<Vec3>,
 ) -> Option<Vec3> {
     for _ in 0..MONSTER_SPAWN_ATTEMPTS {
         let cell = Pos(
@@ -456,7 +442,7 @@ fn random_valid_spawn_translation(
             rng.gen_range(MAP_MIN_CELL..=MAP_MAX_CELL),
         );
         if let Some(translation) =
-            valid_spawn_translation_for_cell(map, occupied, cell, surface_height(cell))
+            valid_spawn_translation_for_cell(map, occupied, cell, &mut collider_placement)
         {
             return Some(translation);
         }
@@ -469,7 +455,7 @@ fn random_valid_spawn_translation_near(
     occupied: &HashSet<Pos>,
     center: Pos,
     rng: &mut impl Rng,
-    mut surface_height: impl FnMut(Pos) -> Option<f32>,
+    mut collider_placement: impl FnMut(Pos) -> Option<Vec3>,
 ) -> Option<Vec3> {
     for _ in 0..MONSTER_SPAWN_ATTEMPTS {
         let offset = Pos(rng.gen_range(-6..=6), rng.gen_range(-6..=6));
@@ -479,7 +465,7 @@ fn random_valid_spawn_translation_near(
         }
         let cell = Pos(center.0 + offset.0, center.1 + offset.1);
         if let Some(translation) =
-            valid_spawn_translation_for_cell(map, occupied, cell, surface_height(cell))
+            valid_spawn_translation_for_cell(map, occupied, cell, &mut collider_placement)
         {
             return Some(translation);
         }
@@ -491,20 +477,38 @@ fn valid_spawn_translation_for_cell(
     map: &Map,
     occupied: &HashSet<Pos>,
     cell: Pos,
-    surface_height: Option<f32>,
+    collider_placement: &mut impl FnMut(Pos) -> Option<Vec3>,
 ) -> Option<Vec3> {
     if map.blocked_paths.contains(&cell) || occupied.contains(&cell) {
         return None;
     }
-    let floor_y = surface_height?;
-    if floor_y < WATER_LEVEL {
+    let translation = collider_placement(cell)?;
+    if translation.y - MONSTER_COLLIDER_HALF_HEIGHT < WATER_LEVEL {
         return None;
     }
-    Some(Vec3::new(
-        cell.0 as f32,
-        floor_y + MONSTER_COLLIDER_HALF_HEIGHT,
-        cell.1 as f32,
-    ))
+
+    let has_reachable_neighbor = [
+        Pos(cell.0 + 1, cell.1),
+        Pos(cell.0 - 1, cell.1),
+        Pos(cell.0, cell.1 + 1),
+        Pos(cell.0, cell.1 - 1),
+    ]
+    .into_iter()
+    .filter(|neighbor| {
+        (MAP_MIN_CELL..=MAP_MAX_CELL).contains(&neighbor.0)
+            && (MAP_MIN_CELL..=MAP_MAX_CELL).contains(&neighbor.1)
+            && !map.blocked_paths.contains(neighbor)
+            && !occupied.contains(neighbor)
+    })
+    .any(|neighbor| {
+        collider_placement(neighbor).is_some_and(|neighbor_translation| {
+            neighbor_translation.y - MONSTER_COLLIDER_HALF_HEIGHT >= WATER_LEVEL
+                && (neighbor_translation.y - translation.y).abs()
+                    <= MONSTER_MAX_NEIGHBOR_HEIGHT_DELTA
+        })
+    });
+
+    has_reachable_neighbor.then_some(translation)
 }
 
 fn world_cell(translation: Vec3) -> Pos {
@@ -525,11 +529,17 @@ mod tests {
 
         let aggressive =
             population_definition(MonsterKind::Pig, MonsterAggression::Aggressive).unwrap();
-        assert_eq!(aggressive.target_count, 1);
+        assert_eq!(aggressive.target_count, 5);
 
         let spell_reactive =
             population_definition(MonsterKind::Pig, MonsterAggression::SpellReactive).unwrap();
-        assert_eq!(spell_reactive.target_count, 1);
+        assert_eq!(spell_reactive.target_count, 5);
+    }
+
+    #[test]
+    fn starting_pigs_use_the_beginner_combat_profile() {
+        assert_eq!(STARTING_PIG_MAX_HEALTH, 75);
+        assert!((STARTING_PIG_ATTACK_PERIOD_SECONDS - 0.8).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -553,25 +563,66 @@ mod tests {
         map.blocked_paths.insert(blocked);
         occupied.insert(occupied_cell);
 
+        let mut valid_placement = |cell: Pos| {
+            Some(Vec3::new(
+                cell.0 as f32,
+                2.5 + MONSTER_COLLIDER_HALF_HEIGHT,
+                cell.1 as f32,
+            ))
+        };
         assert_eq!(
-            valid_spawn_translation_for_cell(&map, &occupied, blocked, Some(2.5)),
+            valid_spawn_translation_for_cell(&map, &occupied, blocked, &mut valid_placement),
             None
         );
         assert_eq!(
-            valid_spawn_translation_for_cell(&map, &occupied, occupied_cell, Some(2.5)),
+            valid_spawn_translation_for_cell(&map, &occupied, occupied_cell, &mut valid_placement),
             None
         );
+        let mut missing_placement = |_| None;
         assert_eq!(
-            valid_spawn_translation_for_cell(&map, &occupied, allowed, None),
+            valid_spawn_translation_for_cell(&map, &occupied, allowed, &mut missing_placement),
             None
         );
+        let mut submerged_placement = |cell: Pos| {
+            Some(Vec3::new(
+                cell.0 as f32,
+                WATER_LEVEL + MONSTER_COLLIDER_HALF_HEIGHT - 0.01,
+                cell.1 as f32,
+            ))
+        };
         assert_eq!(
-            valid_spawn_translation_for_cell(&map, &occupied, allowed, Some(WATER_LEVEL - 0.01)),
+            valid_spawn_translation_for_cell(&map, &occupied, allowed, &mut submerged_placement),
             None
         );
         let translation =
-            valid_spawn_translation_for_cell(&map, &occupied, allowed, Some(2.5)).unwrap();
+            valid_spawn_translation_for_cell(&map, &occupied, allowed, &mut valid_placement)
+                .unwrap();
         assert_eq!(translation, Vec3::new(12.0, 3.5, -8.0));
+    }
+
+    #[test]
+    fn spawn_selection_rejects_a_cell_without_a_reachable_exit() {
+        let mut map = Map::default();
+        let occupied = HashSet::new();
+        let cell = Pos(4, 7);
+        map.blocked_paths.extend([
+            Pos(cell.0 + 1, cell.1),
+            Pos(cell.0 - 1, cell.1),
+            Pos(cell.0, cell.1 + 1),
+            Pos(cell.0, cell.1 - 1),
+        ]);
+        let mut placement = |cell: Pos| {
+            Some(Vec3::new(
+                cell.0 as f32,
+                2.0 + MONSTER_COLLIDER_HALF_HEIGHT,
+                cell.1 as f32,
+            ))
+        };
+
+        assert_eq!(
+            valid_spawn_translation_for_cell(&map, &occupied, cell, &mut placement),
+            None
+        );
     }
 
     #[test]
@@ -582,8 +633,12 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(13);
 
         let spawn =
-            random_valid_spawn_translation_near(&map, &occupied, player_cell, &mut rng, |_| {
-                Some(2.0)
+            random_valid_spawn_translation_near(&map, &occupied, player_cell, &mut rng, |cell| {
+                Some(Vec3::new(
+                    cell.0 as f32,
+                    2.0 + MONSTER_COLLIDER_HALF_HEIGHT,
+                    cell.1 as f32,
+                ))
             })
             .expect("a nearby valid spawn should be found");
         let spawn_cell = world_cell(spawn);

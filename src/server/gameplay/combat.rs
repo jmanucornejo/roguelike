@@ -1,11 +1,17 @@
-use super::pathing::{get_path_between_translations, TargetPos};
+use super::monsters::StartingMapMonster;
+use super::pathing::{
+    get_path_between_translations, DamageWalkDelay, DamageWalkDelayImmunity, TargetPos,
+};
+use super::spawn_protection::SpawnProtection;
 use crate::{
-    server::network::replication::LineOfSight,
+    server::network::replication::{should_receive_player_action, LineOfSight},
     shared::{
         constants::ATTACK_HIT_FRACTION,
         gameplay::components::*,
         gameplay::entities::{AttackSpeed, MapEntity, Player, NPC},
-        gameplay::progression::{BaseProgression, ExperienceReward},
+        gameplay::items::equipment_derived_stats,
+        gameplay::progression::{BaseProgression, ExperienceReward, JobProgression},
+        gameplay::skills::SkillTree,
         network::{channels::ServerChannel, messages::ServerMessages},
     },
 };
@@ -28,10 +34,184 @@ struct AttackAnimation {
 
 const BASIC_ATTACK_DAMAGE_MIN: u32 = 4;
 const BASIC_ATTACK_DAMAGE_MAX: u32 = 7;
+const STARTING_MONSTER_DAMAGE_MIN: u32 = 2;
+const STARTING_MONSTER_DAMAGE_MAX: u32 = 4;
+const BASELINE_PHYSICAL_ATTACK: u32 = 3;
 const MONSTER_AGGRO_DETECTION_RANGE: f32 = 8.0;
+const BASE_BASIC_ATTACK_HIT_CHANCE: i32 = 85;
+const MIN_BASIC_ATTACK_HIT_CHANCE: i32 = 20;
+const MAX_BASIC_ATTACK_HIT_CHANCE: i32 = 95;
+const MONSTER_REPATH_HZ: f32 = 6.0;
+const MONSTER_REPATH_INTERVAL_SECONDS: f32 = 1.0 / MONSTER_REPATH_HZ;
+// The server runs at 60 Hz, so ten phases distribute a 6 Hz repath cycle
+// across successive fixed ticks instead of updating every monster together.
+const MONSTER_REPATH_PHASES: u32 = 10;
 
-fn roll_basic_attack_damage(rng: &mut impl Rng) -> u32 {
-    rng.gen_range(BASIC_ATTACK_DAMAGE_MIN..=BASIC_ATTACK_DAMAGE_MAX)
+#[derive(Component, Debug)]
+struct MonsterRepathSchedule {
+    timer: Timer,
+    map_change_pending: bool,
+}
+
+impl MonsterRepathSchedule {
+    fn new(entity: Entity, map_change_pending: bool) -> Self {
+        let mut timer = Timer::from_seconds(MONSTER_REPATH_INTERVAL_SECONDS, TimerMode::Repeating);
+        timer.set_elapsed(Duration::from_secs_f32(monster_repath_stagger_seconds(
+            entity.index().index(),
+        )));
+        Self {
+            timer,
+            map_change_pending,
+        }
+    }
+}
+
+fn monster_repath_stagger_seconds(entity_index: u32) -> f32 {
+    let phase = entity_index % MONSTER_REPATH_PHASES;
+    MONSTER_REPATH_INTERVAL_SECONDS * phase as f32 / MONSTER_REPATH_PHASES as f32
+}
+
+fn navigation_cell(translation: Vec3) -> Pos {
+    Pos(translation.x.round() as i32, translation.z.round() as i32)
+}
+
+fn pursuit_target_cell_changed(walking: &Walking, target_translation: Vec3) -> bool {
+    navigation_cell(walking.target_translation) != navigation_cell(target_translation)
+}
+
+fn should_recalculate_pursuit_path(
+    is_monster: bool,
+    monster_timer_due: bool,
+    target_cell_changed: bool,
+    map_change_pending: bool,
+) -> bool {
+    (target_cell_changed || map_change_pending) && (!is_monster || monster_timer_due)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CombatRatings {
+    hit: i32,
+    flee: i32,
+}
+
+fn roll_basic_attack_damage(
+    rng: &mut impl Rng,
+    damage_bonus: u32,
+    starting_map_monster: bool,
+) -> u32 {
+    let damage = if starting_map_monster {
+        rng.gen_range(STARTING_MONSTER_DAMAGE_MIN..=STARTING_MONSTER_DAMAGE_MAX)
+    } else {
+        rng.gen_range(BASIC_ATTACK_DAMAGE_MIN..=BASIC_ATTACK_DAMAGE_MAX)
+    };
+    damage.saturating_add(damage_bonus)
+}
+
+fn basic_attack_damage_bonus(
+    stats: Option<&CharacterStats>,
+    progression: Option<&BaseProgression>,
+    equipment: Option<&Equipment>,
+) -> u32 {
+    let Some(stats) = stats else {
+        return 0;
+    };
+    let level = progression.map_or(1, |progression| progression.level);
+    equipment
+        .map_or_else(
+            || stats.derived(level),
+            |equipment| equipment_derived_stats(stats, level, equipment),
+        )
+        .physical_attack
+        .saturating_sub(BASELINE_PHYSICAL_ATTACK)
+}
+
+fn combat_ratings(
+    stats: Option<&CharacterStats>,
+    progression: Option<&BaseProgression>,
+    equipment: Option<&Equipment>,
+    monster: Option<&Monster>,
+) -> CombatRatings {
+    if let Some(stats) = stats {
+        let level = progression.map_or(1, |progression| progression.level);
+        let derived = equipment.map_or_else(
+            || stats.derived(level),
+            |equipment| equipment_derived_stats(stats, level, equipment),
+        );
+        return CombatRatings {
+            hit: i32::try_from(derived.hit).unwrap_or(i32::MAX),
+            flee: i32::try_from(derived.flee).unwrap_or(i32::MAX),
+        };
+    }
+
+    match monster.map(|monster| monster.kind) {
+        Some(MonsterKind::Pig) => CombatRatings { hit: 2, flee: 2 },
+        Some(MonsterKind::Orc) => CombatRatings { hit: 6, flee: 4 },
+        None => CombatRatings { hit: 1, flee: 1 },
+    }
+}
+
+fn basic_attack_hit_chance(attacker: CombatRatings, defender: CombatRatings) -> u8 {
+    (BASE_BASIC_ATTACK_HIT_CHANCE + attacker.hit - defender.flee)
+        .clamp(MIN_BASIC_ATTACK_HIT_CHANCE, MAX_BASIC_ATTACK_HIT_CHANCE) as u8
+}
+
+fn roll_basic_attack_hit(rng: &mut impl Rng, chance_percent: u8) -> bool {
+    rng.gen_range(0..100_u8) < chance_percent
+}
+
+fn mitigate_damage(
+    raw_damage: u32,
+    origin: DamageOrigin,
+    derived: Option<DerivedCharacterStats>,
+) -> u32 {
+    if raw_damage == 0 {
+        return 0;
+    }
+    let defense = derived.map_or(0, |derived| match origin {
+        DamageOrigin::BasicAttack => derived.physical_defense,
+        DamageOrigin::DirectSpell | DamageOrigin::AreaSpell => derived.magic_defense,
+    });
+    raw_damage.saturating_sub(defense).max(1)
+}
+
+fn should_apply_damage_walk_delay(damage: u32, target_is_player: bool, has_immunity: bool) -> bool {
+    damage > 0 && target_is_player && !has_immunity
+}
+
+fn spawn_protection_blocks_damage(
+    damage: u32,
+    target_is_player: bool,
+    has_spawn_protection: bool,
+) -> bool {
+    damage > 0 && target_is_player && has_spawn_protection
+}
+
+fn sync_derived_resource_maxima(
+    mut players: Query<
+        (
+            &CharacterStats,
+            &BaseProgression,
+            &Equipment,
+            &mut Health,
+            &mut Mana,
+        ),
+        (
+            With<Player>,
+            Or<(
+                Changed<CharacterStats>,
+                Changed<BaseProgression>,
+                Changed<Equipment>,
+            )>,
+        ),
+    >,
+) {
+    for (stats, progression, equipment, mut health, mut mana) in &mut players {
+        let derived = equipment_derived_stats(stats, progression.level, equipment);
+        health.max = derived.max_health;
+        health.current = health.current.min(health.max);
+        mana.max = derived.max_mana;
+        mana.current = mana.current.min(mana.max);
+    }
 }
 
 fn aggression_reacts_to(aggression: MonsterAggression, _damage_origin: DamageOrigin) -> bool {
@@ -46,6 +226,10 @@ fn is_within_monster_vision(monster: Vec3, player: Vec3) -> bool {
     let offset = player - monster;
     Vec2::new(offset.x, offset.z).length_squared()
         <= MONSTER_AGGRO_DETECTION_RANGE * MONSTER_AGGRO_DETECTION_RANGE
+}
+
+fn should_release_monster_aggro(monster: Vec3, player: Option<Vec3>) -> bool {
+    player.is_none_or(|player| !is_within_monster_vision(monster, player))
 }
 
 fn provoke_monster_on_damage(
@@ -128,7 +312,7 @@ fn acquire_aggressive_monster_targets(
         ),
         With<Monster>,
     >,
-    players: Query<(Entity, &Transform, &Health), With<Player>>,
+    players: Query<(Entity, &Transform, &Health), (With<Player>, Without<SpawnProtection>)>,
     mut commands: Commands,
 ) {
     let detection_range_squared = MONSTER_AGGRO_DETECTION_RANGE * MONSTER_AGGRO_DETECTION_RANGE;
@@ -169,6 +353,92 @@ fn acquire_aggressive_monster_targets(
     }
 }
 
+fn release_monsters_targeting_protected_players(
+    protected_players: Query<(), (With<Player>, With<SpawnProtection>)>,
+    mut monsters: Query<
+        (
+            Entity,
+            &Aggro,
+            &mut GameVelocity,
+            Option<&mut KinematicCharacterController>,
+        ),
+        With<Monster>,
+    >,
+    mut commands: Commands,
+) {
+    for (monster, aggro, mut velocity, controller) in &mut monsters {
+        if !protected_players.contains(aggro.enemy) {
+            continue;
+        }
+
+        velocity.0 = Vec3::ZERO;
+        if let Some(mut controller) = controller {
+            controller.translation = None;
+        }
+        commands
+            .entity(monster)
+            .try_remove::<Aggro>()
+            .try_remove::<Attacking>()
+            .try_remove::<AttackingTimer>()
+            .try_remove::<Walking>()
+            .try_remove::<TargetPos>();
+    }
+}
+
+fn release_out_of_range_monster_aggro(
+    mut commands: Commands,
+    mut monsters: Query<
+        (
+            Entity,
+            &Transform,
+            &Aggro,
+            &mut GameVelocity,
+            Option<&mut KinematicCharacterController>,
+        ),
+        With<Monster>,
+    >,
+    players: Query<(&Transform, &Health), With<Player>>,
+    map: Res<Map>,
+) {
+    for (monster, monster_transform, aggro, mut velocity, controller) in &mut monsters {
+        let player_translation = players
+            .get(aggro.enemy)
+            .ok()
+            .and_then(|(transform, health)| (health.current > 0).then_some(transform.translation));
+        if !should_release_monster_aggro(monster_transform.translation, player_translation) {
+            continue;
+        }
+
+        let last_known_position = aggro.enemy_translation;
+        let last_known_path =
+            get_path_between_translations(monster_transform.translation, last_known_position, &map)
+                .filter(|(steps, _)| steps.len() > 1);
+
+        velocity.0 = Vec3::ZERO;
+        if let Some(mut controller) = controller {
+            controller.translation = None;
+        }
+        let mut monster_commands = commands.entity(monster);
+        monster_commands
+            .try_remove::<Aggro>()
+            .try_remove::<Attacking>()
+            .try_remove::<AttackingTimer>()
+            .try_remove::<TargetPos>();
+        if let Some(path) = last_known_path {
+            monster_commands.try_insert(Walking {
+                target_translation: last_known_position,
+                path: Some(path),
+            });
+            debug!(
+                "Monster {monster:?} lost aggro and is pursuing last known position {last_known_position:?}"
+            );
+        } else {
+            monster_commands.try_remove::<Walking>();
+            debug!("Monster {monster:?} released aggro at its last known or unreachable position");
+        }
+    }
+}
+
 fn attack_cycle_timer(attack_period: f32, auto_attack: bool) -> Timer {
     let attack_period = attack_period.max(0.001);
     let mode = if auto_attack {
@@ -184,10 +454,33 @@ fn attack_cycle_timer(attack_period: f32, auto_attack: bool) -> Timer {
     timer
 }
 
+fn synchronize_attack_mode(attacking: &mut Attacking, timer: &mut Timer, auto_attack: bool) {
+    if attacking.auto_attack == auto_attack {
+        return;
+    }
+    attacking.auto_attack = auto_attack;
+    timer.set_mode(if auto_attack {
+        TimerMode::Repeating
+    } else {
+        TimerMode::Once
+    });
+}
+
 fn on_death_give_experience(
     trigger: On<DeathEvent>,
     rewards: Query<&ExperienceReward, With<Monster>>,
-    mut players: Query<&mut BaseProgression, With<Player>>,
+    mut players: Query<
+        (
+            &mut BaseProgression,
+            &mut JobProgression,
+            &mut SkillTree,
+            &mut CharacterStats,
+            &Equipment,
+            &mut Health,
+            &mut Mana,
+        ),
+        With<Player>,
+    >,
 ) {
     let death_event = trigger.event();
     let Ok(reward) = rewards.get(death_event.entity) else {
@@ -196,20 +489,50 @@ fn on_death_give_experience(
     let Some(killer) = death_event.killer else {
         return;
     };
-    let Ok(mut progression) = players.get_mut(killer) else {
+    let Ok((
+        mut progression,
+        mut job_progression,
+        mut skill_tree,
+        mut stats,
+        equipment,
+        mut health,
+        mut mana,
+    )) = players.get_mut(killer)
+    else {
         return;
     };
 
     let previous_level = progression.level;
-    let gain = progression.grant_experience(reward.0);
+    let previous_job_level = job_progression.level;
+    let base_gain = progression.grant_experience(reward.base);
+    let job_gain = job_progression.grant_experience(reward.job);
+    let attribute_points_awarded = stats.grant_base_levels(previous_level, base_gain.levels_gained);
+    skill_tree.grant_job_levels(job_gain.levels_gained);
+    if base_gain.levels_gained > 0 {
+        let derived = equipment_derived_stats(&stats, progression.level, equipment);
+        health.max = derived.max_health;
+        health.current = health.max;
+        mana.max = derived.max_mana;
+        mana.current = mana.max;
+    }
     info!(
-        "Player {killer:?} gained {} base XP (level {}, XP {})",
-        gain.amount, progression.level, progression.experience
+        "Player {killer:?} gained {} base XP, {} job XP, and {} attribute points (Base Lv. {}, Job Lv. {})",
+        base_gain.amount,
+        job_gain.amount,
+        attribute_points_awarded,
+        progression.level,
+        job_progression.level
     );
-    if gain.levels_gained > 0 {
+    if base_gain.levels_gained > 0 {
         info!(
             "Player {killer:?} gained {} base level(s): {} -> {}",
-            gain.levels_gained, previous_level, progression.level
+            base_gain.levels_gained, previous_level, progression.level
+        );
+    }
+    if job_gain.levels_gained > 0 {
+        info!(
+            "Player {killer:?} gained {} job level(s): {} -> {}",
+            job_gain.levels_gained, previous_job_level, job_progression.level
         );
     }
 }
@@ -222,6 +545,14 @@ fn should_receive_attack_state(
     viewer_entity == attacking_entity || line_of_sight.0.contains(&attacking_entity)
 }
 
+fn should_receive_damage_number(
+    viewer_entity: Entity,
+    damaged_entity: Entity,
+    line_of_sight: &LineOfSight,
+) -> bool {
+    viewer_entity == damaged_entity || line_of_sight.0.contains(&damaged_entity)
+}
+
 #[cfg(test)]
 mod attack_timing_tests {
     use super::*;
@@ -232,7 +563,7 @@ mod attack_timing_tests {
     fn basic_attack_damage_stays_inside_the_inclusive_range() {
         let mut rng = StdRng::seed_from_u64(42);
         let rolls: HashSet<u32> = (0..1_024)
-            .map(|_| roll_basic_attack_damage(&mut rng))
+            .map(|_| roll_basic_attack_damage(&mut rng, 0, false))
             .collect();
 
         assert_eq!(
@@ -244,6 +575,121 @@ mod attack_timing_tests {
                 BASIC_ATTACK_DAMAGE_MAX,
             ])
         );
+    }
+
+    #[test]
+    fn starting_map_monster_damage_uses_the_beginner_range() {
+        let mut rng = StdRng::seed_from_u64(12);
+        let rolls: HashSet<u32> = (0..1_024)
+            .map(|_| roll_basic_attack_damage(&mut rng, 0, true))
+            .collect();
+
+        assert_eq!(rolls, HashSet::from([2, 3, 4]));
+    }
+
+    #[test]
+    fn might_and_base_level_raise_basic_attack_damage() {
+        let stats = CharacterStats {
+            might: 3,
+            ..default()
+        };
+        let progression = BaseProgression {
+            level: 2,
+            experience: 0,
+        };
+        assert_eq!(
+            basic_attack_damage_bonus(Some(&stats), Some(&progression), None),
+            5
+        );
+        assert_eq!(basic_attack_damage_bonus(None, None, None), 0);
+    }
+
+    #[test]
+    fn finesse_and_agility_supply_character_hit_and_flee() {
+        let stats = CharacterStats {
+            finesse: 7,
+            agility: 5,
+            ..default()
+        };
+        let progression = BaseProgression {
+            level: 10,
+            experience: 0,
+        };
+
+        assert_eq!(
+            combat_ratings(Some(&stats), Some(&progression), None, None),
+            CombatRatings { hit: 17, flee: 15 }
+        );
+    }
+
+    #[test]
+    fn equipment_attack_and_defenses_modify_combat_values() {
+        use crate::shared::gameplay::items::{BASIC_SWORD, CLOTH_ARMOR};
+
+        let stats = CharacterStats::default();
+        let progression = BaseProgression::default();
+        let mut equipment = Equipment::default();
+        equipment.set(EquipmentSlot::MainHand, Some(BASIC_SWORD));
+        equipment.set(EquipmentSlot::Armor, Some(CLOTH_ARMOR));
+
+        assert_eq!(
+            basic_attack_damage_bonus(Some(&stats), Some(&progression), Some(&equipment)),
+            5
+        );
+        let derived = equipment_derived_stats(&stats, progression.level, &equipment);
+        assert_eq!(
+            mitigate_damage(10, DamageOrigin::BasicAttack, Some(derived)),
+            5
+        );
+        assert_eq!(
+            mitigate_damage(3, DamageOrigin::BasicAttack, Some(derived)),
+            1
+        );
+        assert_eq!(
+            mitigate_damage(0, DamageOrigin::BasicAttack, Some(derived)),
+            0
+        );
+    }
+
+    #[test]
+    fn hit_chance_uses_rating_difference_and_stays_bounded() {
+        assert_eq!(
+            basic_attack_hit_chance(
+                CombatRatings { hit: 10, flee: 0 },
+                CombatRatings { hit: 0, flee: 2 }
+            ),
+            93
+        );
+        assert_eq!(
+            basic_attack_hit_chance(
+                CombatRatings { hit: 999, flee: 0 },
+                CombatRatings { hit: 0, flee: 0 }
+            ),
+            95
+        );
+        assert_eq!(
+            basic_attack_hit_chance(
+                CombatRatings { hit: 0, flee: 0 },
+                CombatRatings { hit: 0, flee: 999 }
+            ),
+            20
+        );
+    }
+
+    #[test]
+    fn only_positive_player_damage_applies_walk_delay() {
+        assert!(should_apply_damage_walk_delay(5, true, false));
+        assert!(!should_apply_damage_walk_delay(0, true, false));
+        assert!(!should_apply_damage_walk_delay(5, false, false));
+        assert!(!should_apply_damage_walk_delay(5, true, true));
+    }
+
+    #[test]
+    fn spawn_protection_blocks_positive_player_damage_only() {
+        assert!(spawn_protection_blocks_damage(5, true, true));
+        assert!(!spawn_protection_blocks_damage(0, true, true));
+        assert!(!spawn_protection_blocks_damage(5, false, true));
+        assert!(!spawn_protection_blocks_damage(5, true, false));
     }
 
     #[test]
@@ -475,6 +921,54 @@ mod attack_timing_tests {
     }
 
     #[test]
+    fn aggressive_monster_does_not_detect_a_spawn_protected_player() {
+        let mut app = App::new();
+        app.add_systems(Update, acquire_aggressive_monster_targets);
+        app.world_mut().spawn((
+            Player { id: 1 },
+            Transform::from_xyz(2.0, 1.0, 0.0),
+            Health {
+                current: 40,
+                max: 40,
+            },
+            SpawnProtection::default(),
+        ));
+        let unprotected = app
+            .world_mut()
+            .spawn((
+                Player { id: 2 },
+                Transform::from_xyz(4.0, 1.0, 0.0),
+                Health {
+                    current: 40,
+                    max: 40,
+                },
+            ))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Orc,
+                },
+                MonsterAggression::Aggressive,
+                Transform::default(),
+                Health {
+                    current: 100,
+                    max: 100,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Aggro>(monster).unwrap().enemy,
+            unprotected
+        );
+    }
+
+    #[test]
     fn first_hit_occurs_when_the_fifth_frame_begins() {
         let mut timer = attack_cycle_timer(0.8, true);
 
@@ -483,6 +977,24 @@ mod attack_timing_tests {
         assert!(!timer.just_finished());
         timer.tick(timer.remaining());
         assert!(timer.just_finished());
+    }
+
+    #[test]
+    fn attack_mode_can_upgrade_to_repeating_and_downgrade_to_once() {
+        let enemy = Entity::PLACEHOLDER;
+        let mut attacking = Attacking {
+            enemy,
+            auto_attack: false,
+        };
+        let mut timer = attack_cycle_timer(0.8, false);
+
+        synchronize_attack_mode(&mut attacking, &mut timer, true);
+        assert!(attacking.auto_attack);
+        assert_eq!(timer.mode(), TimerMode::Repeating);
+
+        synchronize_attack_mode(&mut attacking, &mut timer, false);
+        assert!(!attacking.auto_attack);
+        assert_eq!(timer.mode(), TimerMode::Once);
     }
 
     #[test]
@@ -545,7 +1057,22 @@ mod attack_timing_tests {
 
         let killer = app
             .world_mut()
-            .spawn((Player { id: 1 }, BaseProgression::default()))
+            .spawn((
+                Player { id: 1 },
+                BaseProgression::default(),
+                JobProgression::default(),
+                SkillTree::default(),
+                CharacterStats::default(),
+                Equipment::default(),
+                Health {
+                    current: 1,
+                    max: 40,
+                },
+                Mana {
+                    current: 1,
+                    max: 10,
+                },
+            ))
             .id();
         let monster = app
             .world_mut()
@@ -554,7 +1081,7 @@ mod attack_timing_tests {
                     hp: 100,
                     kind: MonsterKind::Pig,
                 },
-                ExperienceReward(120),
+                ExperienceReward { base: 120, job: 80 },
                 Transform::default(),
             ))
             .id();
@@ -572,6 +1099,32 @@ mod attack_timing_tests {
                 experience: 20,
             })
         );
+        assert_eq!(
+            app.world().get::<JobProgression>(killer),
+            Some(&JobProgression {
+                class: crate::shared::gameplay::progression::CharacterClass::Novice,
+                level: 2,
+                experience: 40,
+            })
+        );
+        assert_eq!(
+            app.world()
+                .get::<SkillTree>(killer)
+                .unwrap()
+                .available_points(),
+            1
+        );
+        assert_eq!(
+            app.world()
+                .get::<CharacterStats>(killer)
+                .unwrap()
+                .available_points,
+            STARTING_ATTRIBUTE_POINTS + CharacterStats::attribute_points_for_next_base_level(1)
+        );
+        let health = app.world().get::<Health>(killer).unwrap();
+        assert_eq!((health.current, health.max), (45, 45));
+        let mana = app.world().get::<Mana>(killer).unwrap();
+        assert_eq!((mana.current, mana.max), (12, 12));
     }
 
     #[test]
@@ -592,6 +1145,198 @@ mod attack_timing_tests {
             &empty_line_of_sight
         ));
     }
+
+    #[test]
+    fn player_receives_own_damage_number_without_self_in_line_of_sight() {
+        let mut world = World::new();
+        let viewer = world.spawn_empty().id();
+        let other = world.spawn_empty().id();
+        let empty_line_of_sight = LineOfSight::default();
+
+        assert!(should_receive_damage_number(
+            viewer,
+            viewer,
+            &empty_line_of_sight
+        ));
+        assert!(!should_receive_damage_number(
+            viewer,
+            other,
+            &empty_line_of_sight
+        ));
+    }
+
+    #[test]
+    fn monster_aggro_range_includes_the_boundary_but_not_targets_beyond_it() {
+        assert!(!should_release_monster_aggro(
+            Vec3::ZERO,
+            Some(Vec3::new(MONSTER_AGGRO_DETECTION_RANGE, 30.0, 0.0))
+        ));
+        assert!(should_release_monster_aggro(
+            Vec3::ZERO,
+            Some(Vec3::new(MONSTER_AGGRO_DETECTION_RANGE + 0.01, 0.0, 0.0))
+        ));
+        assert!(should_release_monster_aggro(Vec3::ZERO, None));
+    }
+
+    #[test]
+    fn pursuit_repaths_only_after_the_target_changes_navigation_cells() {
+        let walking = Walking {
+            target_translation: Vec3::new(4.1, 1.0, -2.1),
+            path: None,
+        };
+
+        assert!(!pursuit_target_cell_changed(
+            &walking,
+            Vec3::new(4.49, 8.0, -2.49)
+        ));
+        assert!(pursuit_target_cell_changed(
+            &walking,
+            Vec3::new(4.51, 1.0, -2.1)
+        ));
+    }
+
+    #[test]
+    fn monster_repath_requires_its_staggered_timer_to_be_due() {
+        assert!(!should_recalculate_pursuit_path(true, false, true, false));
+        assert!(should_recalculate_pursuit_path(true, true, true, false));
+        assert!(should_recalculate_pursuit_path(true, true, false, true));
+        assert!(!should_recalculate_pursuit_path(true, true, false, false));
+        assert!(should_recalculate_pursuit_path(false, false, true, false));
+    }
+
+    #[test]
+    fn monster_repath_phases_are_spread_across_the_six_hz_interval() {
+        let phases: Vec<f32> = (0..MONSTER_REPATH_PHASES)
+            .map(monster_repath_stagger_seconds)
+            .collect();
+
+        assert_eq!(phases[0], 0.0);
+        assert!(phases.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(phases.last().copied().unwrap() < MONSTER_REPATH_INTERVAL_SECONDS);
+    }
+
+    #[test]
+    fn out_of_range_monster_walks_to_its_last_known_target_position() {
+        let mut app = App::new();
+        app.insert_resource(Map::default());
+        app.add_systems(Update, release_out_of_range_monster_aggro);
+
+        let player = app
+            .world_mut()
+            .spawn((
+                Player { id: 1 },
+                Transform::from_xyz(MONSTER_AGGRO_DETECTION_RANGE + 1.0, 0.0, 0.0),
+                Health {
+                    max: 100,
+                    current: 100,
+                },
+            ))
+            .id();
+        let monster = app
+            .world_mut()
+            .spawn((
+                Monster {
+                    hp: 100,
+                    kind: MonsterKind::Pig,
+                },
+                Transform::default(),
+                Aggro {
+                    enemy: player,
+                    auto_attack: true,
+                    enemy_translation: Vec3::X * 5.0,
+                },
+                Attacking {
+                    enemy: player,
+                    auto_attack: true,
+                },
+                AttackingTimer(Timer::from_seconds(1.0, TimerMode::Repeating)),
+                Walking {
+                    target_translation: Vec3::X,
+                    path: None,
+                },
+                TargetPos { position: Vec3::X },
+                GameVelocity(Vec3::X),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<GameVelocity>(monster).unwrap().0,
+            Vec3::ZERO
+        );
+        assert!(app.world().get::<Aggro>(monster).is_none());
+        assert!(app.world().get::<Attacking>(monster).is_none());
+        assert!(app.world().get::<AttackingTimer>(monster).is_none());
+        let walking = app.world().get::<Walking>(monster).unwrap();
+        assert_eq!(walking.target_translation, Vec3::X * 5.0);
+        assert!(walking
+            .path
+            .as_ref()
+            .is_some_and(|(steps, _)| steps.len() > 1));
+        assert!(app.world().get::<TargetPos>(monster).is_none());
+    }
+}
+
+fn on_player_death(
+    trigger: On<DeathEvent>,
+    mut players: Query<
+        (
+            &LineOfSight,
+            &mut BaseProgression,
+            Option<&mut GameVelocity>,
+            Option<&mut KinematicCharacterController>,
+        ),
+        With<Player>,
+    >,
+    viewers: Query<(Entity, &Player, &LineOfSight)>,
+    server: Option<ResMut<RenetServer>>,
+    mut commands: Commands,
+) {
+    let dead_entity = trigger.event().entity;
+    let Ok((player_line_of_sight, mut progression, velocity, controller)) =
+        players.get_mut(dead_entity)
+    else {
+        return;
+    };
+
+    let experience_lost = progression.apply_death_penalty();
+    if let Some(mut velocity) = velocity {
+        velocity.0 = Vec3::ZERO;
+    }
+    if let Some(mut controller) = controller {
+        controller.translation = None;
+    }
+
+    commands
+        .entity(dead_entity)
+        .try_insert((Dead, PlayerInput::default()))
+        .try_remove::<Sitting>()
+        .try_remove::<Aggro>()
+        .try_remove::<Attacking>()
+        .try_remove::<AttackingTimer>()
+        .try_remove::<Walking>()
+        .try_remove::<TargetPos>()
+        .try_remove::<crate::server::gameplay::items::PendingItemPickup>()
+        .try_remove::<crate::server::gameplay::spells::AuthoritativeCast>();
+
+    let message = bincode::serialize(&ServerMessages::PlayerDied {
+        entity: dead_entity,
+        experience_lost,
+    })
+    .expect("player death message should serialize");
+    if let Some(mut server) = server {
+        for (viewer_entity, viewer, line_of_sight) in &viewers {
+            if should_receive_player_action(
+                viewer_entity,
+                dead_entity,
+                line_of_sight,
+                player_line_of_sight,
+            ) {
+                server.send_message(viewer.id, ServerChannel::ServerMessages, message.clone());
+            }
+        }
+    }
 }
 
 pub struct CombatPlugin;
@@ -602,34 +1347,35 @@ impl Plugin for CombatPlugin {
         app.add_systems(
             FixedUpdate,
             (
+                sync_derived_resource_maxima.run_if(in_state(ServerState::InGame)),
                 network_change_attacking_state.run_if(in_state(ServerState::InGame)),
                 network_send_delta_health_system.run_if(in_state(ServerState::InGame)),
                 network_send_progression_system.run_if(in_state(ServerState::InGame)),
-                recalculate_path
-                    .before(crate::server::gameplay::pathing::apply_rapier3d_velocity_system),
-                acquire_aggressive_monster_targets.run_if(in_state(ServerState::InGame)),
-                aggro_rapier3d
-                    .run_if(in_state(ServerState::InGame))
-                    .before(crate::server::gameplay::pathing::apply_rapier3d_velocity_system),
-                attack.run_if(in_state(ServerState::InGame)),
+                (
+                    release_monsters_targeting_protected_players
+                        .run_if(in_state(ServerState::InGame)),
+                    release_out_of_range_monster_aggro.run_if(in_state(ServerState::InGame)),
+                    acquire_aggressive_monster_targets.run_if(in_state(ServerState::InGame)),
+                    recalculate_path.run_if(in_state(ServerState::InGame)),
+                    aggro_rapier3d
+                        .run_if(in_state(ServerState::InGame))
+                        .before(crate::server::gameplay::pathing::apply_rapier3d_velocity_system),
+                    attack.run_if(in_state(ServerState::InGame)),
+                )
+                    .chain(),
             ),
         )
         .add_observer(provoke_monster_on_damage)
         .add_observer(provoke_spell_reactive_monster)
         .add_observer(on_death_stop_attackers)
         .add_observer(on_health_change)
+        .add_observer(on_player_death)
         .add_observer(on_death_give_experience)
         .add_observer(on_death_despawn_monsters);
 
         fn aggro_rapier3d(
             mut aggroed_entities: Query<
-                (
-                    Entity,
-                    &Transform,
-                    &mut Aggro,
-                    Option<&mut Attacking>,
-                    Option<&mut Walking>,
-                ),
+                (Entity, &Transform, &Aggro, Option<&mut Attacking>),
                 (Or<(With<Player>, With<NPC>, With<Monster>)>),
             >,
             //attacked_entities: Query<(Entity, &Transform), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
@@ -638,11 +1384,9 @@ impl Plugin for CombatPlugin {
             // rapier_context: Res<RapierContext>,
             read_rapier_context: ReadRapierContext,
             map_query: Query<&MapEntity>,
-            time: Res<Time>,
-            map: Res<Map>,
         ) {
             if let Ok(rapier_context) = read_rapier_context.single() {
-                for (entity, attacker_transform, aggroed, is_attacking, mut is_walking) in
+                for (entity, attacker_transform, aggroed, is_attacking) in
                     aggroed_entities.iter_mut()
                 {
                     let attack_range: f32 = 1.;
@@ -661,14 +1405,17 @@ impl Plugin for CombatPlugin {
                         )
                         // && is_attacking.is_none()
                     ) {
-                        if is_attacking.is_some() {
-                            //info!("walking? {:?}", is_walking);
+                        if let Some(attacking) = is_attacking {
+                            if attacking.enemy == aggroed.enemy {
+                                continue;
+                            }
+                            commands
+                                .entity(entity)
+                                .try_remove::<Attacking>()
+                                .try_remove::<AttackingTimer>();
                             continue;
                         }
                         //info!("ATACARRRRRRRRRRRR");
-                        // STOP WALKING. ALREADY NEAR TARGET.
-                        is_walking = None;
-
                         let mut timer = Timer::from_seconds(1.0, TimerMode::Once);
                         timer.pause(); // Timer pausado hasta que este en rango de ataque;
 
@@ -687,33 +1434,13 @@ impl Plugin for CombatPlugin {
                         continue;
                     }
 
-                    if let Some(walking) = is_walking {
-                        if (walking.target_translation == aggroed.enemy_translation) {
-                            //info!("Already walking. {:?}", walking);
-                            continue;
-                        }
-                    }
-
-                    info!("No esta en attack range ni puede ver al enemigo. No está caminando. Se cambia a caminando.");
-                    let path = get_path_between_translations(
-                        attacker_transform.translation,
-                        aggroed.enemy_translation,
-                        &map,
-                    );
-                    info!(
-                        "Se calcula camino nuevo hacia el enemigo que está en {:?} {:?}",
-                        aggroed.enemy_translation, path
-                    );
-
                     commands
                         .entity(entity)
-                        .try_insert(Walking {
-                            target_translation: aggroed.enemy_translation,
-                            path: path,
-                        })
                         .try_remove::<Attacking>()
                         .try_remove::<AttackingTimer>();
 
+                    // Pursuit movement is exclusively created and refreshed by
+                    // `recalculate_path`, keeping A* in one throttled system.
                     // Si hay camino, se intenta acercar.
                     /*if let Some((steps_vec, steps_left)) = aggroed.path.clone() {
 
@@ -742,16 +1469,30 @@ impl Plugin for CombatPlugin {
 
         fn attack(
             mut attacking_entities: Query<
-                (Entity, &mut Attacking, &AttackSpeed, &mut AttackingTimer),
+                (
+                    Entity,
+                    &Aggro,
+                    &mut Attacking,
+                    &AttackSpeed,
+                    &mut AttackingTimer,
+                ),
                 (Or<(With<Player>, With<NPC>, With<Monster>)>),
             >,
             mut commands: Commands,
             time: Res<Time>,
+            combatants: Query<(
+                Option<&CharacterStats>,
+                Option<&BaseProgression>,
+                Option<&Equipment>,
+                Option<&Monster>,
+                Option<&StartingMapMonster>,
+            )>,
         ) {
             let mut rng = rand::thread_rng();
-            for (entity, attacking, attack_speed, mut attacking_timer) in
+            for (entity, aggro, mut attacking, attack_speed, mut attacking_timer) in
                 attacking_entities.iter_mut()
             {
+                synchronize_attack_mode(&mut attacking, &mut attacking_timer.0, aggro.auto_attack);
                 // Los timers de atraque empiezan detenidos.
                 // Se inicia cuando ya esta en rango y las validaciones son exitosas
                 if attacking_timer.0.is_paused() {
@@ -769,7 +1510,30 @@ impl Plugin for CombatPlugin {
                 }
 
                 info!("Finalizó el timer. Timer: {:?}", attacking_timer.0);
-                let damage = roll_basic_attack_damage(&mut rng);
+                let (attacker_ratings, damage_bonus, starting_map_monster) = combatants
+                    .get(entity)
+                    .map(
+                        |(stats, progression, equipment, monster, starting_map_monster)| {
+                            (
+                                combat_ratings(stats, progression, equipment, monster),
+                                basic_attack_damage_bonus(stats, progression, equipment),
+                                starting_map_monster.is_some(),
+                            )
+                        },
+                    )
+                    .unwrap_or((CombatRatings { hit: 1, flee: 1 }, 0, false));
+                let defender_ratings = combatants
+                    .get(attacking.enemy)
+                    .map(|(stats, progression, equipment, monster, _)| {
+                        combat_ratings(stats, progression, equipment, monster)
+                    })
+                    .unwrap_or(CombatRatings { hit: 1, flee: 1 });
+                let hit_chance = basic_attack_hit_chance(attacker_ratings, defender_ratings);
+                let damage = if roll_basic_attack_hit(&mut rng, hit_chance) {
+                    roll_basic_attack_damage(&mut rng, damage_bonus, starting_map_monster)
+                } else {
+                    0
+                };
                 commands.trigger(HealthChange {
                     entity: attacking.enemy,
                     source: Some(entity),
@@ -888,38 +1652,86 @@ impl Plugin for CombatPlugin {
         // falta el caso en q se mueve el jugador de alguna forma random, debemos tambien
         pub fn recalculate_path(
             mut attackers: Query<
-                (&mut Walking, &Transform, &mut Aggro),
+                (
+                    Entity,
+                    Option<&mut Walking>,
+                    &Transform,
+                    &mut Aggro,
+                    Option<&Monster>,
+                    Option<&Attacking>,
+                    Option<&mut MonsterRepathSchedule>,
+                ),
                 (Or<(With<Player>, With<NPC>, With<Monster>)>),
             >,
-            enemies: Query<
-                (&Transform),
-                (
-                    Or<(With<Player>, With<NPC>, With<Monster>)>,
-                    Changed<Transform>,
-                ),
-            >,
+            enemies: Query<&Transform, Or<(With<Player>, With<NPC>, With<Monster>)>>,
+            time: Res<Time>,
             map: Res<Map>,
+            mut commands: Commands,
         ) {
-            for (mut walking, attacker_transform, mut aggroed) in attackers.iter_mut() {
-                let mut enemy_translation_changed = false;
-                // Caso 1. El enemigo objetivo se ha movido.
-                if let Ok((enemy_transform)) = enemies.get(aggroed.enemy) {
-                    if (aggroed.enemy_translation != enemy_transform.translation) {
-                        aggroed.enemy_translation = enemy_transform.translation;
-                        enemy_translation_changed = true;
-                    }
+            let map_changed = map.is_changed();
+            for (
+                entity,
+                walking,
+                attacker_transform,
+                mut aggroed,
+                monster,
+                attacking,
+                repath_schedule,
+            ) in attackers.iter_mut()
+            {
+                let Ok(enemy_transform) = enemies.get(aggroed.enemy) else {
+                    continue;
+                };
+                let target_translation = enemy_transform.translation;
+                aggroed.enemy_translation = target_translation;
+                if attacking.is_some() {
+                    continue;
+                }
+                let target_cell_changed = walking
+                    .as_ref()
+                    .is_none_or(|walking| pursuit_target_cell_changed(walking, target_translation));
+                let is_monster = monster.is_some();
+                let mut repath_schedule = repath_schedule;
+
+                let (timer_due, map_change_pending) = if is_monster {
+                    let Some(schedule) = repath_schedule.as_deref_mut() else {
+                        commands
+                            .entity(entity)
+                            .try_insert(MonsterRepathSchedule::new(entity, map_changed));
+                        continue;
+                    };
+                    schedule.map_change_pending |= map_changed;
+                    let timer_due = schedule.timer.tick(time.delta()).just_finished();
+                    (timer_due, schedule.map_change_pending)
+                } else {
+                    (true, map_changed)
+                };
+
+                if !should_recalculate_pursuit_path(
+                    is_monster,
+                    timer_due,
+                    target_cell_changed,
+                    map_change_pending,
+                ) {
+                    continue;
                 }
 
-                // Caso 2. El mapa ha cambiado. Esto podría pasar si implementamos por ejemplo magias como "Icewall" que puedan bloquear el camino temporalmente.
-                if (map.is_changed() || enemy_translation_changed) {
-                    walking.path = get_path_between_translations(
-                        attacker_transform.translation,
-                        aggroed.enemy_translation,
-                        &map,
-                    );
-                    info!("Cambio el translation del enemigo: {:?}", walking.path);
-                    /*
-                    aggroed.path = get_path_between_translations(attacker_transform.translation, aggroed.enemy_translation, &map);  */
+                let path = get_path_between_translations(
+                    attacker_transform.translation,
+                    target_translation,
+                    &map,
+                );
+                if let Some(mut walking) = walking {
+                    walking.path = path;
+                    walking.target_translation = target_translation;
+                } else {
+                    commands.entity(entity).try_insert(Walking {
+                        target_translation,
+                        path,
+                    });
+                }
+                if let Some(mut schedule) = repath_schedule {
+                    schedule.map_change_pending = false;
                 }
             }
         }
@@ -995,28 +1807,107 @@ impl Plugin for CombatPlugin {
 
         fn on_health_change(
             trigger: On<HealthChange>,
-            mut query: Query<(Entity, &mut Health)>,
+            mut query: Query<(
+                Entity,
+                &mut Health,
+                Option<&Player>,
+                Option<&Transform>,
+                Option<&Walking>,
+                Option<&DamageWalkDelayImmunity>,
+                Option<&mut GameVelocity>,
+                Option<&mut KinematicCharacterController>,
+                Option<&CharacterStats>,
+                Option<&BaseProgression>,
+                Option<&Equipment>,
+                Option<&SpawnProtection>,
+            )>,
             mut commands: Commands,
             mut server: ResMut<RenetServer>,
-            players: Query<(&Player, &LineOfSight)>,
+            players: Query<(Entity, &Player, &LineOfSight)>,
+            time: Res<Time>,
         ) {
             // If a triggered event is targeting a specific entity you can access it with `.entity()`
             let health_change: &HealthChange = trigger.event();
             let id: Entity = health_change.entity;
 
-            if let Ok((entity, mut health)) = query.get_mut(id) {
+            if let Ok((
+                entity,
+                mut health,
+                damaged_player,
+                transform,
+                walking,
+                walk_delay_immunity,
+                velocity,
+                controller,
+                stats,
+                progression,
+                equipment,
+                spawn_protection,
+            )) = query.get_mut(id)
+            {
                 if health.current == 0 {
                     return;
                 }
+                if spawn_protection_blocks_damage(
+                    health_change.damage,
+                    damaged_player.is_some(),
+                    spawn_protection.is_some(),
+                ) {
+                    return;
+                }
                 info!("Entity  {:?} damaged.", id.index());
+                let derived = stats.map(|stats| {
+                    let level = progression.map_or(1, |progression| progression.level);
+                    equipment.map_or_else(
+                        || stats.derived(level),
+                        |equipment| equipment_derived_stats(stats, level, equipment),
+                    )
+                });
+                let applied_damage =
+                    mitigate_damage(health_change.damage, health_change.origin, derived);
+
+                if should_apply_damage_walk_delay(
+                    applied_damage,
+                    damaged_player.is_some(),
+                    walk_delay_immunity.is_some(),
+                ) {
+                    let pending_destination = walking.map(|walking| walking.target_translation);
+                    if let Some(mut velocity) = velocity {
+                        velocity.0 = Vec3::ZERO;
+                    }
+                    if let Some(mut controller) = controller {
+                        controller.translation = None;
+                    }
+                    commands
+                        .entity(entity)
+                        .try_remove::<Walking>()
+                        .try_remove::<TargetPos>()
+                        .try_insert(DamageWalkDelay::new(pending_destination))
+                        .try_insert(DamageWalkDelayImmunity::default());
+
+                    if let (Some(player), Some(transform)) = (damaged_player, transform) {
+                        let movement_message =
+                            bincode::serialize(&ServerMessages::MovementInterrupted {
+                                entity,
+                                translation: transform.translation.into(),
+                                server_time: time.elapsed().as_millis(),
+                            })
+                            .expect("movement interruption should serialize");
+                        server.send_message(
+                            player.id,
+                            ServerChannel::ServerMessages,
+                            movement_message,
+                        );
+                    }
+                }
 
                 let message = bincode::serialize(&ServerMessages::DamageNumber {
                     entity,
-                    amount: i32::try_from(health_change.damage).unwrap_or(i32::MAX),
+                    amount: i32::try_from(applied_damage).unwrap_or(i32::MAX),
                 })
                 .unwrap();
-                for (player, line_of_sight) in &players {
-                    if line_of_sight.0.contains(&entity) {
+                for (viewer_entity, player, line_of_sight) in &players {
+                    if should_receive_damage_number(viewer_entity, entity, line_of_sight) {
                         server.send_message(
                             player.id,
                             ServerChannel::ServerMessages,
@@ -1025,14 +1916,14 @@ impl Plugin for CombatPlugin {
                     }
                 }
 
-                if (health.current <= health_change.damage) {
+                if health.current <= applied_damage {
                     health.current = 0;
                     commands.trigger(DeathEvent {
                         entity: health_change.entity,
                         killer: health_change.source,
                     });
                 } else {
-                    health.current -= health_change.damage;
+                    health.current -= applied_damage;
                     info!("Health  {:?} ", health);
                 }
             }
@@ -1085,23 +1976,26 @@ impl Plugin for CombatPlugin {
 
         pub fn network_send_delta_health_system(
             mut server: ResMut<RenetServer>,
-            players: Query<(&Player, &LineOfSight)>,
-            mut entities: Query<(Entity, &Health), Changed<Health>>,
+            players: Query<(Entity, &Player, &LineOfSight)>,
+            entities: Query<(Entity, &Health), Changed<Health>>,
             //time: Res<Time>,
         ) {
-            for (player, line_of_sight) in players.iter() {
-                for entity in line_of_sight.0.iter() {
-                    if let Ok((entity, health)) = entities.get_mut(*entity) {
-                        let message = ServerMessages::HealthChange {
-                            entity,
-                            amount: 5,
-                            max: health.max,
-                            current: health.current,
-                        };
+            for (entity, health) in &entities {
+                let message = ServerMessages::HealthChange {
+                    entity,
+                    amount: 5,
+                    max: health.max,
+                    current: health.current,
+                };
+                let sync_message = bincode::serialize(&message).unwrap();
 
-                        let sync_message = bincode::serialize(&message).unwrap();
-                        // Send message to only one client
-                        server.send_message(player.id, ServerChannel::ServerMessages, sync_message);
+                for (viewer_entity, player, line_of_sight) in &players {
+                    if should_receive_damage_number(viewer_entity, entity, line_of_sight) {
+                        server.send_message(
+                            player.id,
+                            ServerChannel::ServerMessages,
+                            sync_message.clone(),
+                        );
                     }
                 }
             }
@@ -1110,12 +2004,16 @@ impl Plugin for CombatPlugin {
         pub fn network_send_progression_system(
             mut server: ResMut<RenetServer>,
             viewers: Query<(Entity, &Player, &LineOfSight)>,
-            changed_progression: Query<(Entity, &BaseProgression), Changed<BaseProgression>>,
+            changed_progression: Query<
+                (Entity, &BaseProgression, &JobProgression),
+                Or<(Changed<BaseProgression>, Changed<JobProgression>)>,
+            >,
         ) {
-            for (entity, progression) in &changed_progression {
+            for (entity, progression, job_progression) in &changed_progression {
                 let message = bincode::serialize(&ServerMessages::ProgressionChanged {
                     entity,
                     progression: *progression,
+                    job_progression: *job_progression,
                 })
                 .expect("progression message should serialize");
 

@@ -1,0 +1,938 @@
+﻿{
+    "schema_version":  1,
+    "export":  "latest-characters-v1",
+    "layout":  "flat",
+    "background":  "transparent",
+    "cell_width":  128,
+    "cell_height":  128,
+    "characters":  [
+                       {
+                           "character":  "alguacil",
+                           "source_slug":  "alguacil",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "alguacil-male-walk.png",
+                                         "idle":  "alguacil-male-idle.png",
+                                         "sit":  "alguacil-male-sit.png",
+                                         "death":  "alguacil-male-death.png",
+                                         "pickup":  "alguacil-male-pickup.png",
+                                         "cast":  "alguacil-male-cast.png",
+                                         "hit":  "alguacil-male-hit.png",
+                                         "attack1":  "alguacil-male-attack1.png",
+                                         "attack2":  "alguacil-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "alguacil",
+                           "source_slug":  "alguacil",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "alguacil-female-walk.png",
+                                         "idle":  "alguacil-female-idle.png",
+                                         "sit":  "alguacil-female-sit.png",
+                                         "death":  "alguacil-female-death.png",
+                                         "pickup":  "alguacil-female-pickup.png",
+                                         "cast":  "alguacil-female-cast.png",
+                                         "hit":  "alguacil-female-hit.png",
+                                         "attack1":  "alguacil-female-attack1.png",
+                                         "attack2":  "alguacil-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "amauta",
+                           "source_slug":  "amauta",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "amauta-male-walk.png",
+                                         "idle":  "amauta-male-idle.png",
+                                         "sit":  "amauta-male-sit.png",
+                                         "death":  "amauta-male-death.png",
+                                         "pickup":  "amauta-male-pickup.png",
+                                         "cast":  "amauta-male-cast.png",
+                                         "hit":  "amauta-male-hit.png",
+                                         "attack1":  "amauta-male-attack1.png",
+                                         "attack2":  "amauta-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "amauta",
+                           "source_slug":  "amauta",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "amauta-female-walk.png",
+                                         "idle":  "amauta-female-idle.png",
+                                         "sit":  "amauta-female-sit.png",
+                                         "death":  "amauta-female-death.png",
+                                         "pickup":  "amauta-female-pickup.png",
+                                         "cast":  "amauta-female-cast.png",
+                                         "hit":  "amauta-female-hit.png",
+                                         "attack1":  "amauta-female-attack1.png",
+                                         "attack2":  "amauta-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "arriero",
+                           "source_slug":  "arriero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "arriero-male-walk.png",
+                                         "idle":  "arriero-male-idle.png",
+                                         "sit":  "arriero-male-sit.png",
+                                         "death":  "arriero-male-death.png",
+                                         "pickup":  "arriero-male-pickup.png",
+                                         "cast":  "arriero-male-cast.png",
+                                         "hit":  "arriero-male-hit.png",
+                                         "attack1":  "arriero-male-attack1.png",
+                                         "attack2":  "arriero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "arriero",
+                           "source_slug":  "arriero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "arriero-female-walk.png",
+                                         "idle":  "arriero-female-idle.png",
+                                         "sit":  "arriero-female-sit.png",
+                                         "death":  "arriero-female-death.png",
+                                         "pickup":  "arriero-female-pickup.png",
+                                         "cast":  "arriero-female-cast.png",
+                                         "hit":  "arriero-female-hit.png",
+                                         "attack1":  "arriero-female-attack1.png",
+                                         "attack2":  "arriero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "artesano",
+                           "source_slug":  "artesano",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "artesano-male-walk.png",
+                                         "idle":  "artesano-male-idle.png",
+                                         "sit":  "artesano-male-sit.png",
+                                         "death":  "artesano-male-death.png",
+                                         "pickup":  "artesano-male-pickup.png",
+                                         "cast":  "artesano-male-cast.png",
+                                         "hit":  "artesano-male-hit.png",
+                                         "attack1":  "artesano-male-attack1.png",
+                                         "attack2":  "artesano-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "artesano",
+                           "source_slug":  "artesano",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "artesano-female-walk.png",
+                                         "idle":  "artesano-female-idle.png",
+                                         "sit":  "artesano-female-sit.png",
+                                         "death":  "artesano-female-death.png",
+                                         "pickup":  "artesano-female-pickup.png",
+                                         "cast":  "artesano-female-cast.png",
+                                         "hit":  "artesano-female-hit.png",
+                                         "attack1":  "artesano-female-attack1.png",
+                                         "attack2":  "artesano-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "awqaq",
+                           "source_slug":  "awqaq",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "awqaq-male-walk.png",
+                                         "idle":  "awqaq-male-idle.png",
+                                         "sit":  "awqaq-male-sit.png",
+                                         "death":  "awqaq-male-death.png",
+                                         "pickup":  "awqaq-male-pickup.png",
+                                         "cast":  "awqaq-male-cast.png",
+                                         "hit":  "awqaq-male-hit.png",
+                                         "attack1":  "awqaq-male-attack1.png",
+                                         "attack2":  "awqaq-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "awqaq",
+                           "source_slug":  "awqaq",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "awqaq-female-walk.png",
+                                         "idle":  "awqaq-female-idle.png",
+                                         "sit":  "awqaq-female-sit.png",
+                                         "death":  "awqaq-female-death.png",
+                                         "pickup":  "awqaq-female-pickup.png",
+                                         "cast":  "awqaq-female-cast.png",
+                                         "hit":  "awqaq-female-hit.png",
+                                         "attack1":  "awqaq-female-attack1.png",
+                                         "attack2":  "awqaq-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "azoguero",
+                           "source_slug":  "azoguero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "azoguero-male-walk.png",
+                                         "idle":  "azoguero-male-idle.png",
+                                         "sit":  "azoguero-male-sit.png",
+                                         "death":  "azoguero-male-death.png",
+                                         "pickup":  "azoguero-male-pickup.png",
+                                         "cast":  "azoguero-male-cast.png",
+                                         "hit":  "azoguero-male-hit.png",
+                                         "attack1":  "azoguero-male-attack1.png",
+                                         "attack2":  "azoguero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "azoguero",
+                           "source_slug":  "azoguero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "azoguero-female-walk.png",
+                                         "idle":  "azoguero-female-idle.png",
+                                         "sit":  "azoguero-female-sit.png",
+                                         "death":  "azoguero-female-death.png",
+                                         "pickup":  "azoguero-female-pickup.png",
+                                         "cast":  "azoguero-female-cast.png",
+                                         "hit":  "azoguero-female-hit.png",
+                                         "attack1":  "azoguero-female-attack1.png",
+                                         "attack2":  "azoguero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "capataz",
+                           "source_slug":  "capataz",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "capataz-male-walk.png",
+                                         "idle":  "capataz-male-idle.png",
+                                         "sit":  "capataz-male-sit.png",
+                                         "death":  "capataz-male-death.png",
+                                         "pickup":  "capataz-male-pickup.png",
+                                         "cast":  "capataz-male-cast.png",
+                                         "hit":  "capataz-male-hit.png",
+                                         "attack1":  "capataz-male-attack1.png",
+                                         "attack2":  "capataz-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "capataz",
+                           "source_slug":  "capataz",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "capataz-female-walk.png",
+                                         "idle":  "capataz-female-idle.png",
+                                         "sit":  "capataz-female-sit.png",
+                                         "death":  "capataz-female-death.png",
+                                         "pickup":  "capataz-female-pickup.png",
+                                         "cast":  "capataz-female-cast.png",
+                                         "hit":  "capataz-female-hit.png",
+                                         "attack1":  "capataz-female-attack1.png",
+                                         "attack2":  "capataz-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "conquistador",
+                           "source_slug":  "conquistador",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "conquistador-male-walk.png",
+                                         "idle":  "conquistador-male-idle.png",
+                                         "sit":  "conquistador-male-sit.png",
+                                         "death":  "conquistador-male-death.png",
+                                         "pickup":  "conquistador-male-pickup.png",
+                                         "cast":  "conquistador-male-cast.png",
+                                         "hit":  "conquistador-male-hit.png",
+                                         "attack1":  "conquistador-male-attack1.png",
+                                         "attack2":  "conquistador-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "conquistador",
+                           "source_slug":  "conquistador",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "conquistador-female-walk.png",
+                                         "idle":  "conquistador-female-idle.png",
+                                         "sit":  "conquistador-female-sit.png",
+                                         "death":  "conquistador-female-death.png",
+                                         "pickup":  "conquistador-female-pickup.png",
+                                         "cast":  "conquistador-female-cast.png",
+                                         "hit":  "conquistador-female-hit.png",
+                                         "attack1":  "conquistador-female-attack1.png",
+                                         "attack2":  "conquistador-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "corregidor",
+                           "source_slug":  "corregidor",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "corregidor-male-walk.png",
+                                         "idle":  "corregidor-male-idle.png",
+                                         "sit":  "corregidor-male-sit.png",
+                                         "death":  "corregidor-male-death.png",
+                                         "pickup":  "corregidor-male-pickup.png",
+                                         "cast":  "corregidor-male-cast.png",
+                                         "hit":  "corregidor-male-hit.png",
+                                         "attack1":  "corregidor-male-attack1.png",
+                                         "attack2":  "corregidor-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "corregidor",
+                           "source_slug":  "corregidor",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "corregidor-female-walk.png",
+                                         "idle":  "corregidor-female-idle.png",
+                                         "sit":  "corregidor-female-sit.png",
+                                         "death":  "corregidor-female-death.png",
+                                         "pickup":  "corregidor-female-pickup.png",
+                                         "cast":  "corregidor-female-cast.png",
+                                         "hit":  "corregidor-female-hit.png",
+                                         "attack1":  "corregidor-female-attack1.png",
+                                         "attack2":  "corregidor-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "curaca",
+                           "source_slug":  "curaca",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "curaca-male-walk.png",
+                                         "idle":  "curaca-male-idle.png",
+                                         "sit":  "curaca-male-sit.png",
+                                         "death":  "curaca-male-death.png",
+                                         "pickup":  "curaca-male-pickup.png",
+                                         "cast":  "curaca-male-cast.png",
+                                         "hit":  "curaca-male-hit.png",
+                                         "attack1":  "curaca-male-attack1.png",
+                                         "attack2":  "curaca-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "curaca",
+                           "source_slug":  "curaca",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "curaca-female-walk.png",
+                                         "idle":  "curaca-female-idle.png",
+                                         "sit":  "curaca-female-sit.png",
+                                         "death":  "curaca-female-death.png",
+                                         "pickup":  "curaca-female-pickup.png",
+                                         "cast":  "curaca-female-cast.png",
+                                         "hit":  "curaca-female-hit.png",
+                                         "attack1":  "curaca-female-attack1.png",
+                                         "attack2":  "curaca-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "doctrinero",
+                           "source_slug":  "doctrinero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "doctrinero-male-walk.png",
+                                         "idle":  "doctrinero-male-idle.png",
+                                         "sit":  "doctrinero-male-sit.png",
+                                         "death":  "doctrinero-male-death.png",
+                                         "pickup":  "doctrinero-male-pickup.png",
+                                         "cast":  "doctrinero-male-cast.png",
+                                         "hit":  "doctrinero-male-hit.png",
+                                         "attack1":  "doctrinero-male-attack1.png",
+                                         "attack2":  "doctrinero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "doctrinero",
+                           "source_slug":  "doctrinero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "doctrinero-female-walk.png",
+                                         "idle":  "doctrinero-female-idle.png",
+                                         "sit":  "doctrinero-female-sit.png",
+                                         "death":  "doctrinero-female-death.png",
+                                         "pickup":  "doctrinero-female-pickup.png",
+                                         "cast":  "doctrinero-female-cast.png",
+                                         "hit":  "doctrinero-female-hit.png",
+                                         "attack1":  "doctrinero-female-attack1.png",
+                                         "attack2":  "doctrinero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "encomendero",
+                           "source_slug":  "encomendero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "encomendero-male-walk.png",
+                                         "idle":  "encomendero-male-idle.png",
+                                         "sit":  "encomendero-male-sit.png",
+                                         "death":  "encomendero-male-death.png",
+                                         "pickup":  "encomendero-male-pickup.png",
+                                         "cast":  "encomendero-male-cast.png",
+                                         "hit":  "encomendero-male-hit.png",
+                                         "attack1":  "encomendero-male-attack1.png",
+                                         "attack2":  "encomendero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "encomendero",
+                           "source_slug":  "encomendero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "encomendero-female-walk.png",
+                                         "idle":  "encomendero-female-idle.png",
+                                         "sit":  "encomendero-female-sit.png",
+                                         "death":  "encomendero-female-death.png",
+                                         "pickup":  "encomendero-female-pickup.png",
+                                         "cast":  "encomendero-female-cast.png",
+                                         "hit":  "encomendero-female-hit.png",
+                                         "attack1":  "encomendero-female-attack1.png",
+                                         "attack2":  "encomendero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "escribano",
+                           "source_slug":  "escribano",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "escribano-male-walk.png",
+                                         "idle":  "escribano-male-idle.png",
+                                         "sit":  "escribano-male-sit.png",
+                                         "death":  "escribano-male-death.png",
+                                         "pickup":  "escribano-male-pickup.png",
+                                         "cast":  "escribano-male-cast.png",
+                                         "hit":  "escribano-male-hit.png",
+                                         "attack1":  "escribano-male-attack1.png",
+                                         "attack2":  "escribano-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "escribano",
+                           "source_slug":  "escribano",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "escribano-female-walk.png",
+                                         "idle":  "escribano-female-idle.png",
+                                         "sit":  "escribano-female-sit.png",
+                                         "death":  "escribano-female-death.png",
+                                         "pickup":  "escribano-female-pickup.png",
+                                         "cast":  "escribano-female-cast.png",
+                                         "hit":  "escribano-female-hit.png",
+                                         "attack1":  "escribano-female-attack1.png",
+                                         "attack2":  "escribano-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "estanciero",
+                           "source_slug":  "estanciero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "estanciero-male-walk.png",
+                                         "idle":  "estanciero-male-idle.png",
+                                         "sit":  "estanciero-male-sit.png",
+                                         "death":  "estanciero-male-death.png",
+                                         "pickup":  "estanciero-male-pickup.png",
+                                         "cast":  "estanciero-male-cast.png",
+                                         "hit":  "estanciero-male-hit.png",
+                                         "attack1":  "estanciero-male-attack1.png",
+                                         "attack2":  "estanciero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "estanciero",
+                           "source_slug":  "estanciero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "estanciero-female-walk.png",
+                                         "idle":  "estanciero-female-idle.png",
+                                         "sit":  "estanciero-female-sit.png",
+                                         "death":  "estanciero-female-death.png",
+                                         "pickup":  "estanciero-female-pickup.png",
+                                         "cast":  "estanciero-female-cast.png",
+                                         "hit":  "estanciero-female-hit.png",
+                                         "attack1":  "estanciero-female-attack1.png",
+                                         "attack2":  "estanciero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "chazki",
+                           "source_slug":  "female_chazki",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "chazki-male-walk.png",
+                                         "idle":  "chazki-male-idle.png",
+                                         "sit":  "chazki-male-sit.png",
+                                         "death":  "chazki-male-death.png",
+                                         "pickup":  "chazki-male-pickup.png",
+                                         "cast":  "chazki-male-cast.png",
+                                         "hit":  "chazki-male-hit.png",
+                                         "attack1":  "chazki-male-attack1.png",
+                                         "attack2":  "chazki-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "chazki",
+                           "source_slug":  "female_chazki",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "chazki-female-walk.png",
+                                         "idle":  "chazki-female-idle.png",
+                                         "sit":  "chazki-female-sit.png",
+                                         "death":  "chazki-female-death.png",
+                                         "pickup":  "chazki-female-pickup.png",
+                                         "cast":  "chazki-female-cast.png",
+                                         "hit":  "chazki-female-hit.png",
+                                         "attack1":  "chazki-female-attack1.png",
+                                         "attack2":  "chazki-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "fraile",
+                           "source_slug":  "fraile",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "fraile-male-walk.png",
+                                         "idle":  "fraile-male-idle.png",
+                                         "sit":  "fraile-male-sit.png",
+                                         "death":  "fraile-male-death.png",
+                                         "pickup":  "fraile-male-pickup.png",
+                                         "cast":  "fraile-male-cast.png",
+                                         "hit":  "fraile-male-hit.png",
+                                         "attack1":  "fraile-male-attack1.png",
+                                         "attack2":  "fraile-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "fraile",
+                           "source_slug":  "fraile",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "fraile-female-walk.png",
+                                         "idle":  "fraile-female-idle.png",
+                                         "sit":  "fraile-female-sit.png",
+                                         "death":  "fraile-female-death.png",
+                                         "pickup":  "fraile-female-pickup.png",
+                                         "cast":  "fraile-female-cast.png",
+                                         "hit":  "fraile-female-hit.png",
+                                         "attack1":  "fraile-female-attack1.png",
+                                         "attack2":  "fraile-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "hacendado",
+                           "source_slug":  "hacendado",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "hacendado-male-walk.png",
+                                         "idle":  "hacendado-male-idle.png",
+                                         "sit":  "hacendado-male-sit.png",
+                                         "death":  "hacendado-male-death.png",
+                                         "pickup":  "hacendado-male-pickup.png",
+                                         "cast":  "hacendado-male-cast.png",
+                                         "hit":  "hacendado-male-hit.png",
+                                         "attack1":  "hacendado-male-attack1.png",
+                                         "attack2":  "hacendado-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "hacendado",
+                           "source_slug":  "hacendado",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "hacendado-female-walk.png",
+                                         "idle":  "hacendado-female-idle.png",
+                                         "sit":  "hacendado-female-sit.png",
+                                         "death":  "hacendado-female-death.png",
+                                         "pickup":  "hacendado-female-pickup.png",
+                                         "cast":  "hacendado-female-cast.png",
+                                         "hit":  "hacendado-female-hit.png",
+                                         "attack1":  "hacendado-female-attack1.png",
+                                         "attack2":  "hacendado-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "haravicu",
+                           "source_slug":  "haravicu",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "haravicu-male-walk.png",
+                                         "idle":  "haravicu-male-idle.png",
+                                         "sit":  "haravicu-male-sit.png",
+                                         "death":  "haravicu-male-death.png",
+                                         "pickup":  "haravicu-male-pickup.png",
+                                         "cast":  "haravicu-male-cast.png",
+                                         "hit":  "haravicu-male-hit.png",
+                                         "attack1":  "haravicu-male-attack1.png",
+                                         "attack2":  "haravicu-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "haravicu",
+                           "source_slug":  "haravicu",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "haravicu-female-walk.png",
+                                         "idle":  "haravicu-female-idle.png",
+                                         "sit":  "haravicu-female-sit.png",
+                                         "death":  "haravicu-female-death.png",
+                                         "pickup":  "haravicu-female-pickup.png",
+                                         "cast":  "haravicu-female-cast.png",
+                                         "hit":  "haravicu-female-hit.png",
+                                         "attack1":  "haravicu-female-attack1.png",
+                                         "attack2":  "haravicu-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "maestro_de_oficio",
+                           "source_slug":  "maestro_de_oficio",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "maestro_de_oficio-male-walk.png",
+                                         "idle":  "maestro_de_oficio-male-idle.png",
+                                         "sit":  "maestro_de_oficio-male-sit.png",
+                                         "death":  "maestro_de_oficio-male-death.png",
+                                         "pickup":  "maestro_de_oficio-male-pickup.png",
+                                         "cast":  "maestro_de_oficio-male-cast.png",
+                                         "hit":  "maestro_de_oficio-male-hit.png",
+                                         "attack1":  "maestro_de_oficio-male-attack1.png",
+                                         "attack2":  "maestro_de_oficio-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "maestro_de_oficio",
+                           "source_slug":  "maestro_de_oficio",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "maestro_de_oficio-female-walk.png",
+                                         "idle":  "maestro_de_oficio-female-idle.png",
+                                         "sit":  "maestro_de_oficio-female-sit.png",
+                                         "death":  "maestro_de_oficio-female-death.png",
+                                         "pickup":  "maestro_de_oficio-female-pickup.png",
+                                         "cast":  "maestro_de_oficio-female-cast.png",
+                                         "hit":  "maestro_de_oficio-female-hit.png",
+                                         "attack1":  "maestro_de_oficio-female-attack1.png",
+                                         "attack2":  "maestro_de_oficio-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "marinero",
+                           "source_slug":  "marinero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "marinero-male-walk.png",
+                                         "idle":  "marinero-male-idle.png",
+                                         "sit":  "marinero-male-sit.png",
+                                         "death":  "marinero-male-death.png",
+                                         "pickup":  "marinero-male-pickup.png",
+                                         "cast":  "marinero-male-cast.png",
+                                         "hit":  "marinero-male-hit.png",
+                                         "attack1":  "marinero-male-attack1.png",
+                                         "attack2":  "marinero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "marinero",
+                           "source_slug":  "marinero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "marinero-female-walk.png",
+                                         "idle":  "marinero-female-idle.png",
+                                         "sit":  "marinero-female-sit.png",
+                                         "death":  "marinero-female-death.png",
+                                         "pickup":  "marinero-female-pickup.png",
+                                         "cast":  "marinero-female-cast.png",
+                                         "hit":  "marinero-female-hit.png",
+                                         "attack1":  "marinero-female-attack1.png",
+                                         "attack2":  "marinero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "mayordomo",
+                           "source_slug":  "mayordomo",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "mayordomo-male-walk.png",
+                                         "idle":  "mayordomo-male-idle.png",
+                                         "sit":  "mayordomo-male-sit.png",
+                                         "death":  "mayordomo-male-death.png",
+                                         "pickup":  "mayordomo-male-pickup.png",
+                                         "cast":  "mayordomo-male-cast.png",
+                                         "hit":  "mayordomo-male-hit.png",
+                                         "attack1":  "mayordomo-male-attack1.png",
+                                         "attack2":  "mayordomo-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "mayordomo",
+                           "source_slug":  "mayordomo",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "mayordomo-female-walk.png",
+                                         "idle":  "mayordomo-female-idle.png",
+                                         "sit":  "mayordomo-female-sit.png",
+                                         "death":  "mayordomo-female-death.png",
+                                         "pickup":  "mayordomo-female-pickup.png",
+                                         "cast":  "mayordomo-female-cast.png",
+                                         "hit":  "mayordomo-female-hit.png",
+                                         "attack1":  "mayordomo-female-attack1.png",
+                                         "attack2":  "mayordomo-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "mercader",
+                           "source_slug":  "mercader",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "mercader-male-walk.png",
+                                         "idle":  "mercader-male-idle.png",
+                                         "sit":  "mercader-male-sit.png",
+                                         "death":  "mercader-male-death.png",
+                                         "pickup":  "mercader-male-pickup.png",
+                                         "cast":  "mercader-male-cast.png",
+                                         "hit":  "mercader-male-hit.png",
+                                         "attack1":  "mercader-male-attack1.png",
+                                         "attack2":  "mercader-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "mercader",
+                           "source_slug":  "mercader",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "mercader-female-walk.png",
+                                         "idle":  "mercader-female-idle.png",
+                                         "sit":  "mercader-female-sit.png",
+                                         "death":  "mercader-female-death.png",
+                                         "pickup":  "mercader-female-pickup.png",
+                                         "cast":  "mercader-female-cast.png",
+                                         "hit":  "mercader-female-hit.png",
+                                         "attack1":  "mercader-female-attack1.png",
+                                         "attack2":  "mercader-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "minero",
+                           "source_slug":  "minero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "minero-male-walk.png",
+                                         "idle":  "minero-male-idle.png",
+                                         "sit":  "minero-male-sit.png",
+                                         "death":  "minero-male-death.png",
+                                         "pickup":  "minero-male-pickup.png",
+                                         "cast":  "minero-male-cast.png",
+                                         "hit":  "minero-male-hit.png",
+                                         "attack1":  "minero-male-attack1.png",
+                                         "attack2":  "minero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "minero",
+                           "source_slug":  "minero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "minero-female-walk.png",
+                                         "idle":  "minero-female-idle.png",
+                                         "sit":  "minero-female-sit.png",
+                                         "death":  "minero-female-death.png",
+                                         "pickup":  "minero-female-pickup.png",
+                                         "cast":  "minero-female-cast.png",
+                                         "hit":  "minero-female-hit.png",
+                                         "attack1":  "minero-female-attack1.png",
+                                         "attack2":  "minero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "oidor",
+                           "source_slug":  "oidor",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "oidor-male-walk.png",
+                                         "idle":  "oidor-male-idle.png",
+                                         "sit":  "oidor-male-sit.png",
+                                         "death":  "oidor-male-death.png",
+                                         "pickup":  "oidor-male-pickup.png",
+                                         "cast":  "oidor-male-cast.png",
+                                         "hit":  "oidor-male-hit.png",
+                                         "attack1":  "oidor-male-attack1.png",
+                                         "attack2":  "oidor-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "oidor",
+                           "source_slug":  "oidor",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "oidor-female-walk.png",
+                                         "idle":  "oidor-female-idle.png",
+                                         "sit":  "oidor-female-sit.png",
+                                         "death":  "oidor-female-death.png",
+                                         "pickup":  "oidor-female-pickup.png",
+                                         "cast":  "oidor-female-cast.png",
+                                         "hit":  "oidor-female-hit.png",
+                                         "attack1":  "oidor-female-attack1.png",
+                                         "attack2":  "oidor-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "pulpero",
+                           "source_slug":  "pulpero",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "pulpero-male-walk.png",
+                                         "idle":  "pulpero-male-idle.png",
+                                         "sit":  "pulpero-male-sit.png",
+                                         "death":  "pulpero-male-death.png",
+                                         "pickup":  "pulpero-male-pickup.png",
+                                         "cast":  "pulpero-male-cast.png",
+                                         "hit":  "pulpero-male-hit.png",
+                                         "attack1":  "pulpero-male-attack1.png",
+                                         "attack2":  "pulpero-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "pulpero",
+                           "source_slug":  "pulpero",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "pulpero-female-walk.png",
+                                         "idle":  "pulpero-female-idle.png",
+                                         "sit":  "pulpero-female-sit.png",
+                                         "death":  "pulpero-female-death.png",
+                                         "pickup":  "pulpero-female-pickup.png",
+                                         "cast":  "pulpero-female-cast.png",
+                                         "hit":  "pulpero-female-hit.png",
+                                         "attack1":  "pulpero-female-attack1.png",
+                                         "attack2":  "pulpero-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "quipucamayoc",
+                           "source_slug":  "quipucamayoc",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "quipucamayoc-male-walk.png",
+                                         "idle":  "quipucamayoc-male-idle.png",
+                                         "sit":  "quipucamayoc-male-sit.png",
+                                         "death":  "quipucamayoc-male-death.png",
+                                         "pickup":  "quipucamayoc-male-pickup.png",
+                                         "cast":  "quipucamayoc-male-cast.png",
+                                         "hit":  "quipucamayoc-male-hit.png",
+                                         "attack1":  "quipucamayoc-male-attack1.png",
+                                         "attack2":  "quipucamayoc-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "quipucamayoc",
+                           "source_slug":  "quipucamayoc",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "quipucamayoc-female-walk.png",
+                                         "idle":  "quipucamayoc-female-idle.png",
+                                         "sit":  "quipucamayoc-female-sit.png",
+                                         "death":  "quipucamayoc-female-death.png",
+                                         "pickup":  "quipucamayoc-female-pickup.png",
+                                         "cast":  "quipucamayoc-female-cast.png",
+                                         "hit":  "quipucamayoc-female-hit.png",
+                                         "attack1":  "quipucamayoc-female-attack1.png",
+                                         "attack2":  "quipucamayoc-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "soldado_de_presidio",
+                           "source_slug":  "soldado_de_presidio",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "soldado_de_presidio-male-walk.png",
+                                         "idle":  "soldado_de_presidio-male-idle.png",
+                                         "sit":  "soldado_de_presidio-male-sit.png",
+                                         "death":  "soldado_de_presidio-male-death.png",
+                                         "pickup":  "soldado_de_presidio-male-pickup.png",
+                                         "cast":  "soldado_de_presidio-male-cast.png",
+                                         "hit":  "soldado_de_presidio-male-hit.png",
+                                         "attack1":  "soldado_de_presidio-male-attack1.png",
+                                         "attack2":  "soldado_de_presidio-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "soldado_de_presidio",
+                           "source_slug":  "soldado_de_presidio",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "soldado_de_presidio-female-walk.png",
+                                         "idle":  "soldado_de_presidio-female-idle.png",
+                                         "sit":  "soldado_de_presidio-female-sit.png",
+                                         "death":  "soldado_de_presidio-female-death.png",
+                                         "pickup":  "soldado_de_presidio-female-pickup.png",
+                                         "cast":  "soldado_de_presidio-female-cast.png",
+                                         "hit":  "soldado_de_presidio-female-hit.png",
+                                         "attack1":  "soldado_de_presidio-female-attack1.png",
+                                         "attack2":  "soldado_de_presidio-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "virrey",
+                           "source_slug":  "virrey",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "virrey-male-walk.png",
+                                         "idle":  "virrey-male-idle.png",
+                                         "sit":  "virrey-male-sit.png",
+                                         "death":  "virrey-male-death.png",
+                                         "pickup":  "virrey-male-pickup.png",
+                                         "cast":  "virrey-male-cast.png",
+                                         "hit":  "virrey-male-hit.png",
+                                         "attack1":  "virrey-male-attack1.png",
+                                         "attack2":  "virrey-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "virrey",
+                           "source_slug":  "virrey",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "virrey-female-walk.png",
+                                         "idle":  "virrey-female-idle.png",
+                                         "sit":  "virrey-female-sit.png",
+                                         "death":  "virrey-female-death.png",
+                                         "pickup":  "virrey-female-pickup.png",
+                                         "cast":  "virrey-female-cast.png",
+                                         "hit":  "virrey-female-hit.png",
+                                         "attack1":  "virrey-female-attack1.png",
+                                         "attack2":  "virrey-female-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "visitador",
+                           "source_slug":  "visitador",
+                           "gender":  "male",
+                           "files":  {
+                                         "walk":  "visitador-male-walk.png",
+                                         "idle":  "visitador-male-idle.png",
+                                         "sit":  "visitador-male-sit.png",
+                                         "death":  "visitador-male-death.png",
+                                         "pickup":  "visitador-male-pickup.png",
+                                         "cast":  "visitador-male-cast.png",
+                                         "hit":  "visitador-male-hit.png",
+                                         "attack1":  "visitador-male-attack1.png",
+                                         "attack2":  "visitador-male-attack2.png"
+                                     }
+                       },
+                       {
+                           "character":  "visitador",
+                           "source_slug":  "visitador",
+                           "gender":  "female",
+                           "files":  {
+                                         "walk":  "visitador-female-walk.png",
+                                         "idle":  "visitador-female-idle.png",
+                                         "sit":  "visitador-female-sit.png",
+                                         "death":  "visitador-female-death.png",
+                                         "pickup":  "visitador-female-pickup.png",
+                                         "cast":  "visitador-female-cast.png",
+                                         "hit":  "visitador-female-hit.png",
+                                         "attack1":  "visitador-female-attack1.png",
+                                         "attack2":  "visitador-female-attack2.png"
+                                     }
+                       }
+                   ]
+}

@@ -1,8 +1,11 @@
 pub mod combat;
+pub mod equipment;
 pub mod items;
 pub mod monsters;
 pub mod pathing;
 pub mod physics;
 pub mod projectiles;
+pub mod regeneration;
 pub mod spatial;
+pub mod spawn_protection;
 pub mod spells;
