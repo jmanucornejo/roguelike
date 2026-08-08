@@ -11,7 +11,7 @@ use crate::{
             pathing::get_path_between_translations, spatial::NearestNeighbourComponent,
             spells::AuthoritativeCast,
         },
-        network::replication::LineOfSight,
+        network::replication::{should_receive_player_action, LineOfSight},
         persistence::{PersistenceClient, PersistenceRequest},
         state::CharacterPersistenceQueue,
     },
@@ -25,7 +25,8 @@ use crate::{
             events::DeathEvent,
             items::{
                 item_definition, ConsumableEffect, GroundItem, Inventory, ItemDefinitionId,
-                GROUND_ITEM_VISUAL_HALF_HEIGHT, LUCKY_CLOVER, PIG_MEAT, RED_HERB,
+                APPRENTICE_STAFF, BASIC_SWORD, CLOTH_ARMOR, GROUND_ITEM_VISUAL_HALF_HEIGHT,
+                LUCKY_CLOVER, PIG_MEAT, RED_HERB, SIMPLE_BOOTS,
             },
         },
         network::{channels::ServerChannel, messages::ServerMessages},
@@ -46,7 +47,7 @@ struct LootEntry {
     chance_basis_points: u16,
 }
 
-const PIG_LOOT: [LootEntry; 3] = [
+const PIG_LOOT: [LootEntry; 7] = [
     LootEntry {
         item_id: PIG_MEAT,
         chance_basis_points: 10_000,
@@ -58,6 +59,22 @@ const PIG_LOOT: [LootEntry; 3] = [
     LootEntry {
         item_id: LUCKY_CLOVER,
         chance_basis_points: 2_500,
+    },
+    LootEntry {
+        item_id: BASIC_SWORD,
+        chance_basis_points: 1_500,
+    },
+    LootEntry {
+        item_id: CLOTH_ARMOR,
+        chance_basis_points: 1_500,
+    },
+    LootEntry {
+        item_id: SIMPLE_BOOTS,
+        chance_basis_points: 1_500,
+    },
+    LootEntry {
+        item_id: APPRENTICE_STAFF,
+        chance_basis_points: 1_500,
     },
 ];
 
@@ -297,6 +314,7 @@ fn complete_pending_item_pickups(
     mut players: Query<(
         Entity,
         &Player,
+        &LineOfSight,
         &Transform,
         &CharacterId,
         &mut Inventory,
@@ -306,8 +324,15 @@ fn complete_pending_item_pickups(
     persistence: Option<Res<PersistenceClient>>,
     mut persistence_queue: ResMut<CharacterPersistenceQueue>,
 ) {
-    for (player_entity, player, player_transform, character_id, mut inventory, pending) in
-        &mut players
+    for (
+        player_entity,
+        player,
+        player_line_of_sight,
+        player_transform,
+        character_id,
+        mut inventory,
+        pending,
+    ) in &mut players
     {
         let Ok((item, item_transform, mut claim)) = drops.get_mut(pending.ground_item) else {
             commands
@@ -335,6 +360,25 @@ fn complete_pending_item_pickups(
         })
         .expect("inventory update should serialize");
         server.send_message(player.id, ServerChannel::ServerMessages, inventory_message);
+
+        let pickup_message = bincode::serialize(&ServerMessages::ItemPickedUp {
+            entity: player_entity,
+        })
+        .expect("item pickup animation should serialize");
+        for (viewer_entity, viewer, line_of_sight) in &viewers {
+            if should_receive_player_action(
+                viewer_entity,
+                player_entity,
+                line_of_sight,
+                player_line_of_sight,
+            ) {
+                server.send_message(
+                    viewer.id,
+                    ServerChannel::ServerMessages,
+                    pickup_message.clone(),
+                );
+            }
+        }
 
         if character_id.0 != 0 {
             if let Some(persistence) = persistence.as_deref() {

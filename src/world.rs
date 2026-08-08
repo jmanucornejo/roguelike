@@ -1,284 +1,127 @@
-// use avian3d::{parry::shape, prelude::*};
-use crate::shared::gameplay::entities::MapEntity;
-use bevy::prelude::*;
-use bevy_platform::collections::hash_map::HashMap;
+#[cfg(feature = "client")]
 use std::f32::consts::PI;
 
+use bevy::prelude::*;
+use bevy_platform::collections::hash_map::HashMap;
 use bevy_rapier3d::prelude::*;
 
-pub fn setup_level(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
-    mut _graphs: ResMut<Assets<AnimationGraph>>,
+#[cfg(feature = "client")]
+use crate::shared::gameplay::maps::map_definition;
+use crate::shared::gameplay::{
+    entities::MapEntity,
+    maps::{CurrentMap, MapDefinition, MAP_DEFINITIONS, STARTING_MAP_NAME},
+};
+
+/// Loads every playable map into the authoritative, non-rendering server
+/// physics world. Visual-only decorations and lighting are client concerns.
+pub fn setup_server_level(mut commands: Commands, asset_server: Res<AssetServer>) {
+    for definition in &MAP_DEFINITIONS {
+        spawn_map_scene(&mut commands, &asset_server, definition);
+    }
+    spawn_server_starting_map_collision(&mut commands);
+}
+
+/// Replaces the rendered/client-side collision map with the one selected by
+/// the authoritative server. Other maps remain loaded only on the server.
+#[cfg(feature = "client")]
+pub fn replace_client_map(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    asset_server: &AssetServer,
+    existing_map_entities: &Query<Entity, With<MapEntity>>,
+    map_name: &str,
+) -> &'static str {
+    for entity in existing_map_entities.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    let definition = map_definition(map_name);
+    spawn_map_scene(commands, asset_server, definition);
+    if definition.name == STARTING_MAP_NAME {
+        spawn_starting_map_decorations(commands, meshes, materials, asset_server);
+    }
+    info!("Client loaded map '{}'", definition.name);
+    definition.name
+}
+
+#[cfg(feature = "client")]
+pub fn setup_world_lighting(mut commands: Commands) {
+    spawn_world_lighting(&mut commands);
+}
+
+fn spawn_map_scene(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    definition: &MapDefinition,
 ) {
-    // Load the texture
-    //let texture_handle = asset_server.load("textures/grass/grass1-albedo3.png");
-
-    // Create a material with the texture
-    /*let material = materials.add(StandardMaterial {
-        base_color_texture: Some(texture_handle),
-        ..Default::default()
-    });*/
-    // plane
-    /*commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid::new(301., 0.5, 301.))),
-            //material: material,
-            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
-            transform: Transform::from_xyz(0.0, 0.99, 0.0),
-            ..Default::default()
-        },  Name::new("Plane"),
-        ColliderConstructor::TrimeshFromMesh,
-        RigidBody::Static,
-    ));*/
-
-    commands.spawn((
-        Mesh3d(meshes.add(Mesh::from(Cuboid::new(3., 5., 11.)))),
-        MeshMaterial3d(materials.add(Color::srgb(0.3, 0.5, 0.3))),
-        Transform::from_xyz(0.0, 0.99, 0.0),
-        /*PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid::new(3., 5., 11.))),
-            //material: material,
-            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
-            transform: Transform::from_xyz(0.0, 0.99, 0.0),
-            ..Default::default()
-        },  */
-        Name::new("Wall"),
-        MapEntity,
-        // Rapier3d Settings
-        Collider::cuboid(1.5, 2.5, 5.5),
-        RigidBody::Fixed, //Avian3s Settings
-                          //Collider::cuboid(3., 5., 11.),
-                          //RigidBody::Static,
-    ));
-
-    /*commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid::new(11., 5., 1.))),
-            //material: material,
-            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
-            transform: Transform::from_xyz(1., 0.99, 6.),
-            ..Default::default()
-        },
-        Name::new("Wall"),
-        MapEntity,
-        Collider::cuboid(11., 5., 1.),
-        RigidBody::Static,
-    ));*/
-
-    // Create a plane to represent the water surface
-    //let water_mesh = meshes.add(Plane3d::default().mesh().size(50.0, 50.0));
-
-    // Load the custom shader
-    // let shader_handle: Handle<Shader> = asset_server.load("shaders/water.wgsl");
-
-    // Add a custom material (we'll create this next)
-    /*let water_material = materials.add(StandardMaterial {
-         base_color: Color::srgba(0.0, 0.3, 0.6, 0.7), // Transparent blue color for water
-         reflectance: 0.5,  // Make it slightly reflective
-         perceptual_roughness: 0.1,  // Lower roughness for a more reflective, glossy surface
-         metallic: 0.1,  // Water tends to have a little bit of a metallic reflection
-         ..Default::default()
-     });
-
-    // Create a material using the shader
-    let water_material = water_materials.add(WaterMaterial { time: 0.0 });
-
-    Cuboid::default();
-
-    commands.spawn((MaterialMeshBundle {
-        mesh: meshes.add(Mesh::from(Cuboid::new(31., 0.0, 31.))),
-        transform: Transform::from_xyz(10.0, 2., 10.0),
-        material: water_materials.add(WaterMaterial {
-            time: 0.5
-        }),
-        ..default()
-    },  Name::new("Water")));*/
-
-    /*
-    let wall_handle = asset_server.load("models/wall_door_-_19mb2.glb#Scene0");
-
-    commands.spawn((
-        SceneBundle {
-            scene: wall_handle.clone(),
-            transform: Transform {
-                translation: Vec3::new(0.0, 0.0, 0.0),
-                scale: Vec3::splat(0.7),
-                //rotation,
-                ..Default::default()
-            },
-
-            ..Default::default()
-        },
-        Name::new("Wall"),
-        MapEntity,
-        ColliderConstructorHierarchy::new(ColliderConstructor::ConvexDecompositionFromMesh)
-        )
-    );*/
-
-    let tree_handle = asset_server.load("models/palm_tree.glb#Scene0");
-
-    commands.spawn((
-        WorldAssetRoot(tree_handle.clone()),
-        Transform {
-            translation: Vec3::new(20.0, -1.0, 20.0),
-            scale: Vec3::splat(0.7),
-            //rotation,
-            ..Default::default()
-        },
-        /*SceneBundle {
-            scene: tree_handle.clone(),
-            transform: Transform {
-                translation: Vec3::new(20.0, -1.0, 20.0),
-                scale: Vec3::splat(0.7),
-                //rotation,
-                ..Default::default()
-            },
-
-            ..Default::default()
-        },*/
-        Name::new("Palm tree"),
-        MapEntity,
-        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(tree_handle.clone()),
-        Transform {
-            translation: Vec3::new(10.0, -1.0, 18.0),
-            scale: Vec3::splat(0.5),
-            //rotation,
-            ..Default::default()
-        },
-        /*SceneBundle {
-            scene: tree_handle.clone(),
-            transform: Transform {
-                translation: Vec3::new(10.0, -1.0, 18.0),
-                scale: Vec3::splat(0.5),
-                //rotation,
-                ..Default::default()
-            },
-
-            ..Default::default()
-        },*/
-        Name::new("Palm tree"),
-        MapEntity,
-        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
-    ));
-
-    /*let blood_handle = asset_server.load("models/light_beam.glb#Scene0");
-
-    commands.spawn((
-        SceneBundle {
-            scene: blood_handle.clone(),
-            transform: Transform {
-                translation: Vec3::new(10.0, -1.0, 10.0),
-                scale: Vec3::splat(1.0),
-                //rotation,
-                ..Default::default()
-            },
-
-            ..Default::default()
-        },
-        Name::new("Blood"),
-        MapEntity,
-        //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh)
-        )
-    );*/
-
-    // Load textures
-    /*let black_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5514_seamless_2.jpg.png");
-    let red_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5487_seamless.jpg");
-    let green_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5498_seamless.jpg");
-    let blue_texture_handle: Handle<Image> = asset_server.load("textures/IMGP5525_seamless.jpg");
-
-     // Load the RGB mask
-     let mask_texture_handle: Handle<Image> = asset_server.load("terrain/terrain_mask_RGB.png");
-
-
-     let shader_handle: Handle<Shader> = asset_server.load("shaders/bujama.wgsl");
-
-    let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");*/
-
-    let scene_handle = asset_server.load("terrain/bujama-3.glb#Scene0");
-    /*let mesh: Handle<Mesh> = asset_server.load("terrain/bujama-3.gltf#Scene0");
-    println!("mesh: {:?}", mesh);
-
-    let m = &meshes.get(&mesh);
-    println!("m: {:?}", m);
-    let collider = Collider::from_bevy_mesh(m.unwrap(), &ComputedColliderShape::TriMesh).unwrap();*/
-    //let scene_handle: Handle<Scene> = asset_server.load("terrain/bujama.glb#Scene0");
+    let scene = asset_server.load(definition.asset_path);
     commands
         .spawn((
-            WorldAssetRoot(scene_handle.clone()),
-            Transform {
-                translation: Vec3::new(0.0, 0.0, 0.0),
-                //scale: Vec3::splat(25.0),
-                //rotation,
-                ..Default::default()
-            },
-            /*SceneBundle {
-                scene: scene_handle.clone(),
-                transform: Transform {
-                    translation: Vec3::new(0.0, 0.0, 0.0),
-                    //scale: Vec3::splat(25.0),
-                    //rotation,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },*/
-            Name::new("Map"),
+            WorldAssetRoot(scene),
+            Transform::from_translation(Vec3::from_array(definition.server_origin)),
+            Name::new(format!("Map: {}", definition.name)),
             MapEntity,
+            CurrentMap(definition.name.to_string()),
             RigidBody::Fixed,
-            //Collider::from_bevy_mesh(m.unwrap(), &ComputedColliderShape::TriMesh)
-            //ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
-            //RigidBody::Static
         ))
         .insert(AsyncSceneCollider {
-            // handle: scene_handle,
-            // `TriMesh` gives us the most accurate collisions, at the cost of
-            // physics complexity.
             shape: Some(ComputedColliderShape::TriMesh(TriMeshFlags::default())),
             named_shapes: HashMap::default(),
         });
+}
 
-    //.insert(collider);
+fn spawn_server_starting_map_collision(commands: &mut Commands) {
+    commands.spawn((
+        Transform::from_xyz(0.0, 0.99, 0.0),
+        Name::new("Wall Collision"),
+        MapEntity,
+        CurrentMap(STARTING_MAP_NAME.to_string()),
+        Collider::cuboid(1.5, 2.5, 5.5),
+        RigidBody::Fixed,
+    ));
+}
 
-    /*commands.spawn((
-        RigidBody::Dynamic,
-        Collider::cuboid(1.0, 1.0, 1.0),
-        Mass(5.0),
-        PbrBundle {
-            mesh: meshes.add(Cuboid::default()),
-            material: materials.add(Color::srgb(0.8, 0.7, 0.6)),
-            transform: Transform::from_xyz(3.0, 5.0, 5.0),
-            ..default()
-        },
-        GravityScale(1.0),
-    ));*/
+#[cfg(feature = "client")]
+fn spawn_starting_map_decorations(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    asset_server: &AssetServer,
+) {
+    let map = CurrentMap(STARTING_MAP_NAME.to_string());
+    commands.spawn((
+        Mesh3d(meshes.add(Mesh::from(Cuboid::new(3.0, 5.0, 11.0)))),
+        MeshMaterial3d(materials.add(Color::srgb(0.3, 0.5, 0.3))),
+        Transform::from_xyz(0.0, 0.99, 0.0),
+        Name::new("Wall"),
+        MapEntity,
+        map.clone(),
+        Collider::cuboid(1.5, 2.5, 5.5),
+        RigidBody::Fixed,
+    ));
 
-    /* commands.spawn((PbrBundle {
-        mesh: meshes.add(Mesh::from(Cuboid::new(5., 4.0, 5.))),
-        material: materials.add(Color::srgb(0.3, 0.0, 0.3)),
-        transform: Transform::from_xyz(0.0, 0.99, 0.0),
-        ..Default::default()
-    },
-    Name::new("Box")))
-    .insert(
-        Building {
-            blocked_paths:  vec![
-                Pos(2,2), Pos(2,1), Pos(2,0), Pos(2,-1), Pos(2,-2),
-                Pos(1,2), Pos(1,1), Pos(1,0), Pos(1,-1), Pos(1,-2),
-                Pos(0,2), Pos(0,1), Pos(0,0), Pos(0,-1), Pos(0,-2),
-                Pos(-1,2), Pos(-1,1), Pos(-1,0), Pos(-1,-1), Pos(-1,-2),
-                Pos(-2,2), Pos(-2,1), Pos(-2,0), Pos(-2,-1), Pos(-2,-2)
-            ]
-        }
-    );*/
+    let tree = asset_server.load("models/palm_tree.glb#Scene0");
+    for (translation, scale) in [
+        (Vec3::new(20.0, -1.0, 20.0), 0.7),
+        (Vec3::new(10.0, -1.0, 18.0), 0.5),
+    ] {
+        commands.spawn((
+            WorldAssetRoot(tree.clone()),
+            Transform {
+                translation,
+                scale: Vec3::splat(scale),
+                ..default()
+            },
+            Name::new("Palm tree"),
+            MapEntity,
+            map.clone(),
+        ));
+    }
+}
 
-    // light
+#[cfg(feature = "client")]
+fn spawn_world_lighting(commands: &mut Commands) {
     commands.spawn((
         DirectionalLight {
             shadow_maps_enabled: true,
@@ -286,22 +129,9 @@ pub fn setup_level(
         },
         Transform {
             translation: Vec3::new(0.0, 2.0, 0.0),
-            rotation: Quat::from_rotation_x(-PI / 4.),
-            //rotation,
-            ..Default::default()
+            rotation: Quat::from_rotation_x(-PI / 4.0),
+            ..default()
         },
+        Name::new("World Sun"),
     ));
-
-    /*commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        transform: Transform {
-            translation: Vec3::new(0.0, 2.0, 0.0),
-            rotation: Quat::from_rotation_x(-PI / 4.),
-            ..default()
-        },
-        ..default()
-    });*/
 }

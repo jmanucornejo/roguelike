@@ -2,9 +2,32 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use bevy_renet::renet::ClientId;
-use renet_visualizer::RenetServerVisualizer;
 
-use crate::server::persistence::{CharacterId, CharacterSnapshot};
+use crate::server::persistence::{AccountId, CharacterId, CharacterSnapshot};
+
+#[derive(Clone, Debug)]
+pub(super) struct AccountSession {
+    pub(super) account_id: AccountId,
+    pub(super) username: String,
+}
+
+#[derive(Debug)]
+pub(super) enum PendingAccountRequest {
+    Login {
+        client_id: ClientId,
+        username: String,
+    },
+    Register {
+        client_id: ClientId,
+        username: String,
+    },
+    ListCharacters {
+        client_id: ClientId,
+    },
+    CreateCharacter {
+        client_id: ClientId,
+    },
+}
 
 #[derive(Debug)]
 pub(super) struct DeferredCharacterSave {
@@ -33,6 +56,8 @@ pub(super) struct CharacterPersistenceQueue {
     next_request_id: u64,
     pub(super) waiting_clients: HashSet<ClientId>,
     pub(super) load_requests: HashMap<u64, ClientId>,
+    pub(super) account_requests: HashMap<u64, PendingAccountRequest>,
+    pub(super) authenticated_accounts: HashMap<ClientId, AccountSession>,
     pub(super) save_requests: HashMap<u64, CharacterId>,
     pub(super) saves_in_flight: HashMap<CharacterId, CharacterSnapshot>,
     pub(super) deferred_saves: HashMap<CharacterId, DeferredCharacterSave>,
@@ -47,6 +72,8 @@ impl Default for CharacterPersistenceQueue {
             next_request_id: 0,
             waiting_clients: HashSet::new(),
             load_requests: HashMap::new(),
+            account_requests: HashMap::new(),
+            authenticated_accounts: HashMap::new(),
             save_requests: HashMap::new(),
             saves_in_flight: HashMap::new(),
             deferred_saves: HashMap::new(),
@@ -67,11 +94,25 @@ impl CharacterPersistenceQueue {
         self.waiting_clients.remove(&client_id);
         self.load_requests
             .retain(|_, pending_client_id| *pending_client_id != client_id);
+        self.account_requests.retain(|_, request| match request {
+            PendingAccountRequest::Login {
+                client_id: pending_client_id,
+                ..
+            }
+            | PendingAccountRequest::Register {
+                client_id: pending_client_id,
+                ..
+            }
+            | PendingAccountRequest::ListCharacters {
+                client_id: pending_client_id,
+            }
+            | PendingAccountRequest::CreateCharacter {
+                client_id: pending_client_id,
+            } => *pending_client_id != client_id,
+        });
+        self.authenticated_accounts.remove(&client_id);
     }
 }
 
 #[derive(Resource)]
 pub(super) struct SnapshotTimer(pub(super) Timer);
-
-#[derive(Resource, Deref, DerefMut)]
-pub(super) struct ServerVisualizer(pub(super) RenetServerVisualizer<200>);

@@ -6,13 +6,16 @@ pub const ATTACK_HIT_FRAME_INDEX: usize = 4;
 pub const ATTACK_HIT_FRACTION: f32 =
     ATTACK_HIT_FRAME_INDEX as f32 / ATTACK_ANIMATION_FRAME_COUNT as f32;
 pub const CHARACTER_GRAVITY: f32 = -9.81;
+/// Downward speed requested while grounded so Rapier keeps snap-to-ground
+/// active when a character walks onto a descending surface.
+pub const CHARACTER_GROUND_STICK_SPEED: f32 = -2.0;
 pub const CHARACTER_CONTROLLER_OFFSET: f32 = 0.3;
 pub const CHARACTER_GROUND_SNAP_DISTANCE: f32 = 0.5;
 /// Safe starting-map position on connected terrain and outside the origin wall.
 pub const DEFAULT_CHARACTER_SPAWN: [f32; 3] = [-10.0, 1.0, 0.0];
 pub const WATER_LEVEL: f32 = -2.0;
 pub const WATER_RENDER_LEVEL: f32 = WATER_LEVEL - 2.02;
-pub const LINE_OF_SIGHT: f32 = 12.0;
+pub const LINE_OF_SIGHT: f32 = 14.0;
 pub const TRANSLATION_PRECISION: f32 = 0.001;
 pub const INTERPOLATE_BUFFER: u128 = 200;
 pub const NETWORK_SNAPSHOT_HZ: f32 = 30.0;

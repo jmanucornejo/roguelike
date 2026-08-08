@@ -11,9 +11,10 @@ use crate::client::presentation::health_bars::{
 use crate::client::presentation::spells::CastSpell;
 use crate::client::state::{ControlledPlayer, LocalPlayerInput};
 use crate::shared::gameplay::components::{
-    facing_from_direction, world_direction_from_facing, Animation, Facing, GameVelocity,
-    PlayerInput,
+    facing_from_direction, world_direction_from_facing, Animation, Dead, Facing, GameVelocity,
+    Health, PlayerInput,
 };
+use crate::shared::gameplay::spells::{spell_definition, SpellTargeting};
 use crate::shared::network::messages::PlayerCommand;
 use crate::shared::states::ClientState;
 
@@ -76,7 +77,12 @@ impl Plugin for CastingPlugin {
             )
             .add_systems(
                 Update,
-                (tick_casts, tick_cast_cooldowns).run_if(in_state(ClientState::InGame)),
+                (
+                    cancel_casts_for_dead_entities,
+                    tick_casts,
+                    tick_cast_cooldowns,
+                )
+                    .run_if(in_state(ClientState::InGame)),
             )
             .add_observer(on_request_spell_cast)
             .add_observer(on_confirmed_spell_cast_started)
@@ -100,7 +106,7 @@ fn on_request_spell_cast(
             Option<&mut PredictedMovement>,
             Option<&mut KinematicCharacterController>,
         ),
-        With<ControlledPlayer>,
+        (With<ControlledPlayer>, Without<Dead>),
     >,
 ) {
     let request = trigger.event();
@@ -125,27 +131,60 @@ fn on_request_spell_cast(
         return;
     }
 
-    if let Some(new_facing) = facing_from_direction(request.translation - transform.translation) {
-        *facing = new_facing;
+    let Some(definition) = spell_definition(request.spell_id) else {
+        warn!("Ignoring unknown spell {}", request.spell_id);
+        return;
+    };
+    if definition.max_range.is_some_and(|max_range| {
+        let offset = request.translation - transform.translation;
+        Vec2::new(offset.x, offset.z).length_squared() > (max_range * max_range) as f32
+    }) {
+        info!("Ignoring spell cast because its target is out of range");
+        return;
     }
 
-    // This is presentation-side prediction only. The server validates the
-    // request and owns the actual movement lock, facing, timer, and cooldown.
-    **player_input = PlayerInput::default();
-    velocity.0 = Vec3::ZERO;
-    if let Some(mut prediction) = prediction {
-        prediction.destination = None;
+    let self_cast = definition.targeting == SpellTargeting::SelfOnly;
+    if !self_cast {
+        if let Some(new_facing) = facing_from_direction(request.translation - transform.translation)
+        {
+            *facing = new_facing;
+        }
+
+        // This is presentation-side prediction only. The server validates the
+        // request and owns the actual movement lock, facing, timer, and cooldown.
+        **player_input = PlayerInput::default();
+        velocity.0 = Vec3::ZERO;
+        if let Some(mut prediction) = prediction {
+            prediction.destination = None;
+        }
+        if let Some(mut controller) = controller {
+            controller.translation = None;
+        }
+        *animation = Animation::Idle;
     }
-    if let Some(mut controller) = controller {
-        controller.translation = None;
-    }
-    *animation = Animation::Idle;
 
     player_commands.write(PlayerCommand::Cast {
         spell_id: request.spell_id,
         cast_at: request.translation,
         target_entity: request.target_entity,
     });
+}
+
+fn cancel_casts_for_dead_entities(
+    mut commands: Commands,
+    mut casters: Query<(Entity, &Health, Option<&Dead>, &mut Animation), With<CastingSpell>>,
+) {
+    for (entity, health, dead, mut animation) in &mut casters {
+        if health.current > 0 && dead.is_none() {
+            continue;
+        }
+
+        *animation = Animation::Idle;
+        commands
+            .entity(entity)
+            .remove::<CastingSpell>()
+            .remove::<BarSettings<CastingSpell>>();
+    }
 }
 
 fn on_confirmed_spell_cast_started(
@@ -158,13 +197,17 @@ fn on_confirmed_spell_cast_started(
         return;
     };
 
-    *facing = confirmed.facing.clone();
-    velocity.0 = Vec3::ZERO;
-    commands
-        .entity(confirmed.entity)
-        .insert(LastAnimationDirection(world_direction_from_facing(
-            confirmed.facing.0,
-        )));
+    let self_cast = spell_definition(confirmed.spell_id)
+        .is_some_and(|definition| definition.targeting == SpellTargeting::SelfOnly);
+    if !self_cast {
+        *facing = confirmed.facing.clone();
+        velocity.0 = Vec3::ZERO;
+        commands
+            .entity(confirmed.entity)
+            .insert(LastAnimationDirection(world_direction_from_facing(
+                confirmed.facing.0,
+            )));
+    }
     if confirmed.cast_time.is_zero() {
         return;
     }
@@ -195,7 +238,11 @@ fn on_confirmed_spell_cast_completed(
     });
 
     if let Ok((mut animation, controlled)) = casters.get_mut(confirmed.entity) {
-        *animation = Animation::Idle;
+        let self_cast = spell_definition(confirmed.spell_id)
+            .is_some_and(|definition| definition.targeting == SpellTargeting::SelfOnly);
+        if !self_cast {
+            *animation = Animation::Idle;
+        }
         let mut caster = commands.entity(confirmed.entity);
         caster
             .remove::<CastingSpell>()
@@ -238,5 +285,36 @@ mod tests {
         casting.timer.tick(Duration::from_secs(1));
 
         assert!((casting.value() - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn death_clears_the_cast_state_and_progress_bar() {
+        let mut app = App::new();
+        app.add_systems(Update, cancel_casts_for_dead_entities);
+        let caster = app
+            .world_mut()
+            .spawn((
+                CastingSpell::new(Duration::from_secs(4)),
+                BarSettings::<CastingSpell> {
+                    offset: CAST_BAR_WORLD_OFFSET,
+                    width: 1.5,
+                    height: BarHeight::Static(0.1),
+                    ..default()
+                },
+                Health {
+                    current: 0,
+                    max: 100,
+                },
+                Dead,
+                Animation::Casting,
+            ))
+            .id();
+
+        app.update();
+
+        let caster = app.world().entity(caster);
+        assert!(!caster.contains::<CastingSpell>());
+        assert!(!caster.contains::<BarSettings<CastingSpell>>());
+        assert!(matches!(caster.get::<Animation>(), Some(Animation::Idle)));
     }
 }

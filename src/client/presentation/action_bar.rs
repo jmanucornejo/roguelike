@@ -6,13 +6,15 @@ use bevy::{
 use crate::{
     client::{presentation::inventory::item_color, state::ControlledPlayer},
     shared::{
+        gameplay::action_bar::{ActionBarBinding, ActionBarLayout, ACTION_BAR_SLOT_COUNT},
         gameplay::items::{Inventory, ItemDefinitionId},
+        gameplay::progression::CharacterClass,
+        gameplay::skills::{skill_definition, SkillId, SkillTree},
         network::messages::PlayerCommand,
         states::ClientState,
     },
 };
 
-pub(crate) const ACTION_BAR_SLOT_COUNT: usize = 10;
 const ACTION_BAR_SLOT_SIZE: f32 = 30.0;
 const ACTION_BAR_SLOT_GAP: f32 = 1.0;
 const ACTION_BAR_HANDLE_WIDTH: f32 = 14.0;
@@ -33,23 +35,41 @@ struct ActionItemIcon(usize);
 #[derive(Component)]
 struct ActionItemQuantity(usize);
 
+#[derive(Component)]
+struct ActionBarDragGhost;
+
+#[derive(Resource, Debug, Default)]
+struct ActionBarSlotDrag {
+    source_slot: Option<usize>,
+    ghost: Option<Entity>,
+}
+
 #[derive(Resource, Debug, Default)]
 pub(crate) struct ActionBarBindings {
-    items: [Option<ItemDefinitionId>; ACTION_BAR_SLOT_COUNT],
+    layout: ActionBarLayout,
 }
 
 impl ActionBarBindings {
     pub(crate) fn bind_item(&mut self, slot_index: usize, item_id: ItemDefinitionId) -> bool {
-        // F1-F3 remain spell slots. Consumables can be assigned to F4-F10.
-        if !(3..ACTION_BAR_SLOT_COUNT).contains(&slot_index) {
-            return false;
-        }
-        self.items[slot_index] = Some(item_id);
-        true
+        self.layout
+            .set(slot_index, Some(ActionBarBinding::Item(item_id)))
     }
 
-    fn item(&self, slot_index: usize) -> Option<ItemDefinitionId> {
-        self.items.get(slot_index).copied().flatten()
+    pub(crate) fn bind_skill(&mut self, slot_index: usize, skill_id: SkillId) -> bool {
+        self.layout
+            .set(slot_index, Some(ActionBarBinding::Skill(skill_id)))
+    }
+
+    pub(crate) fn binding(&self, slot_index: usize) -> Option<ActionBarBinding> {
+        self.layout.binding(slot_index)
+    }
+
+    pub(crate) fn replace(&mut self, layout: ActionBarLayout) {
+        self.layout = layout;
+    }
+
+    fn swap(&mut self, first_slot: usize, second_slot: usize) -> bool {
+        self.layout.swap(first_slot, second_slot)
     }
 }
 
@@ -116,10 +136,16 @@ impl Plugin for ActionBarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActionBarState>()
             .init_resource::<ActionBarBindings>()
+            .init_resource::<ActionBarSlotDrag>()
             .add_systems(OnEnter(ClientState::InGame), spawn_action_bar)
             .add_systems(
                 Update,
-                (drag_action_bar, update_item_slots, use_bound_item)
+                (
+                    drag_action_bar,
+                    drag_action_bar_slot,
+                    update_slots,
+                    activate_bound_item,
+                )
                     .run_if(in_state(ClientState::InGame)),
             )
             .add_systems(OnExit(ClientState::InGame), despawn_action_bar);
@@ -205,34 +231,6 @@ fn spawn_drag_handle(bar: &mut ChildSpawnerCommands) {
 }
 
 fn spawn_action_slot(bar: &mut ChildSpawnerCommands, slot_index: usize) {
-    let placeholder_spell = match slot_index {
-        0 => Some((
-            Color::srgb(0.18, 0.38, 0.92),
-            Color::srgb(0.48, 0.76, 1.0),
-            Color::srgb(0.86, 0.96, 1.0),
-            "F1",
-        )),
-        1 => Some((
-            Color::srgb(0.56, 0.19, 0.84),
-            Color::srgb(0.82, 0.52, 1.0),
-            Color::srgb(0.98, 0.88, 1.0),
-            "F2",
-        )),
-        2 => Some((
-            Color::srgb(0.91, 0.31, 0.08),
-            Color::srgb(1.0, 0.72, 0.30),
-            Color::srgb(1.0, 0.97, 0.76),
-            "F3",
-        )),
-        _ => None,
-    };
-    let occupied = placeholder_spell.is_some();
-    let background = if occupied {
-        Color::srgb(0.105, 0.12, 0.23)
-    } else {
-        Color::srgba(0.025, 0.03, 0.045, 0.88)
-    };
-
     bar.spawn((
         Node {
             width: Val::Px(ACTION_BAR_SLOT_SIZE),
@@ -242,78 +240,47 @@ fn spawn_action_slot(bar: &mut ChildSpawnerCommands, slot_index: usize) {
             border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
-        BackgroundColor(background),
+        BackgroundColor(Color::srgba(0.025, 0.03, 0.045, 0.88)),
         BorderColor::all(Color::srgb(0.43, 0.46, 0.53)),
         Pickable::IGNORE,
         Name::new(format!("Action Slot {}", slot_index + 1)),
     ))
     .with_children(|slot| {
-        if let Some((orb_color, border_color, glow_color, hotkey)) = placeholder_spell {
-            // A small glowing orb stands in for a real spell icon until the
-            // spell inventory supplies textures.
-            slot.spawn((
-                Node {
-                    width: Val::Px(19.0),
-                    height: Val::Px(19.0),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    ..default()
-                },
-                BackgroundColor(orb_color),
-                BorderColor::all(border_color),
-                Pickable::IGNORE,
-            ))
-            .with_child((
-                Node {
-                    width: Val::Px(6.0),
-                    height: Val::Px(6.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..default()
-                },
-                BackgroundColor(glow_color),
-                Pickable::IGNORE,
-            ));
-
-            spawn_hotkey_label(slot, hotkey);
-        } else {
-            slot.spawn((
-                Node {
-                    width: Val::Px(19.0),
-                    height: Val::Px(19.0),
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(2.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::WHITE),
-                BorderColor::all(Color::srgb(0.92, 0.92, 0.95)),
-                Visibility::Hidden,
-                Pickable::IGNORE,
-                ActionItemIcon(slot_index),
-            ));
-            slot.spawn((
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(8.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                TextShadow {
-                    offset: Vec2::new(1.0, 1.0),
-                    color: Color::BLACK,
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(1.0),
-                    top: Val::Px(0.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-                ActionItemQuantity(slot_index),
-            ));
-            spawn_hotkey_label(slot, &format!("F{}", slot_index + 1));
-        }
+        slot.spawn((
+            Node {
+                width: Val::Px(19.0),
+                height: Val::Px(19.0),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::WHITE),
+            BorderColor::all(Color::srgb(0.92, 0.92, 0.95)),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+            ActionItemIcon(slot_index),
+        ));
+        slot.spawn((
+            Text::new(""),
+            TextFont {
+                font_size: FontSize::Px(8.0),
+                ..default()
+            },
+            TextColor(Color::WHITE),
+            TextShadow {
+                offset: Vec2::new(1.0, 1.0),
+                color: Color::BLACK,
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(1.0),
+                top: Val::Px(0.0),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ActionItemQuantity(slot_index),
+        ));
+        spawn_hotkey_label(slot, &format!("F{}", slot_index + 1));
     });
 }
 
@@ -339,41 +306,66 @@ fn spawn_hotkey_label(slot: &mut ChildSpawnerCommands, hotkey: &str) {
     ));
 }
 
-fn update_item_slots(
+fn update_slots(
     bindings: Res<ActionBarBindings>,
     inventory: Query<&Inventory, With<ControlledPlayer>>,
+    skill_tree: Query<&SkillTree, With<ControlledPlayer>>,
     mut icons: Query<(&ActionItemIcon, &mut Visibility, &mut BackgroundColor)>,
     mut quantities: Query<(&ActionItemQuantity, &mut Text)>,
 ) {
     let inventory = inventory.single().ok();
+    let skill_tree = skill_tree.single().ok();
 
     for (icon, mut visibility, mut color) in &mut icons {
-        if let Some(item_id) = bindings.item(icon.0) {
+        if let Some(binding) = bindings.binding(icon.0) {
             *visibility = Visibility::Inherited;
-            color.0 = item_color(item_id);
+            color.0 = binding_color(binding);
         } else {
             *visibility = Visibility::Hidden;
         }
     }
     for (quantity, mut text) in &mut quantities {
-        text.0 = bindings
-            .item(quantity.0)
-            .map(|item_id| {
-                inventory
-                    .map(|inventory| inventory.quantity(item_id))
-                    .unwrap_or_default()
-                    .to_string()
-            })
-            .unwrap_or_default();
+        text.0 = match bindings.binding(quantity.0) {
+            Some(ActionBarBinding::Item(item_id)) => inventory
+                .map(|inventory| inventory.quantity(item_id))
+                .unwrap_or_default()
+                .to_string(),
+            Some(ActionBarBinding::Skill(skill_id)) => skill_tree
+                .map(|skill_tree| format!("L{}", skill_tree.rank(skill_id)))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
     }
 }
 
-fn use_bound_item(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    bindings: Res<ActionBarBindings>,
-    mut player_commands: MessageWriter<PlayerCommand>,
-) {
+fn binding_color(binding: ActionBarBinding) -> Color {
+    match binding {
+        ActionBarBinding::Spell(1) => Color::srgb(0.18, 0.38, 0.92),
+        ActionBarBinding::Spell(2) => Color::srgb(0.56, 0.19, 0.84),
+        ActionBarBinding::Spell(3) => Color::srgb(0.91, 0.31, 0.08),
+        ActionBarBinding::Spell(4) => Color::srgb(0.08, 0.62, 0.34),
+        ActionBarBinding::Spell(_) => Color::srgb(0.45, 0.45, 0.65),
+        ActionBarBinding::Item(item_id) => item_color(item_id),
+        ActionBarBinding::Skill(skill_id) => skill_definition(skill_id)
+            .map(|definition| match definition.class {
+                CharacterClass::Novice => Color::srgb(0.55, 0.62, 0.72),
+                CharacterClass::Swordsman => Color::srgb(0.78, 0.22, 0.18),
+                CharacterClass::Mage => Color::srgb(0.32, 0.28, 0.88),
+                CharacterClass::Archer => Color::srgb(0.22, 0.66, 0.30),
+                CharacterClass::Acolyte => Color::srgb(0.90, 0.76, 0.30),
+                CharacterClass::Merchant => Color::srgb(0.82, 0.48, 0.16),
+                CharacterClass::Thief => Color::srgb(0.52, 0.22, 0.66),
+                _ => Color::srgb(0.48, 0.42, 0.34),
+            })
+            .unwrap_or(Color::srgb(0.42, 0.42, 0.48)),
+    }
+}
+
+pub(crate) fn pressed_action_bar_slot(keyboard: &ButtonInput<KeyCode>) -> Option<usize> {
     let keys = [
+        KeyCode::F1,
+        KeyCode::F2,
+        KeyCode::F3,
         KeyCode::F4,
         KeyCode::F5,
         KeyCode::F6,
@@ -382,13 +374,92 @@ fn use_bound_item(
         KeyCode::F9,
         KeyCode::F10,
     ];
+    keys.into_iter().position(|key| keyboard.just_pressed(key))
+}
 
-    for (offset, key) in keys.into_iter().enumerate() {
-        if keyboard.just_pressed(key) {
-            if let Some(item_id) = bindings.item(offset + 3) {
-                player_commands.write(PlayerCommand::UseItem { item_id });
+fn activate_bound_item(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    bindings: Res<ActionBarBindings>,
+    mut player_commands: MessageWriter<PlayerCommand>,
+) {
+    let Some(slot_index) = pressed_action_bar_slot(&keyboard) else {
+        return;
+    };
+    if let Some(ActionBarBinding::Item(item_id)) = bindings.binding(slot_index) {
+        player_commands.write(PlayerCommand::UseItem { item_id });
+    }
+}
+
+fn drag_action_bar_slot(
+    mut commands: Commands,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    state: Res<ActionBarState>,
+    mut bindings: ResMut<ActionBarBindings>,
+    mut drag: ResMut<ActionBarSlotDrag>,
+    mut ghosts: Query<&mut Node, With<ActionBarDragGhost>>,
+    mut player_commands: MessageWriter<PlayerCommand>,
+) {
+    let Ok(window) = primary_window.single() else {
+        return;
+    };
+    let pointer = window.cursor_position();
+
+    if mouse_buttons.just_pressed(MouseButton::Left) {
+        if let Some(pointer) = pointer {
+            if let Some(source_slot) = state.slot_at(pointer) {
+                if let Some(binding) = bindings.binding(source_slot) {
+                    let ghost = commands
+                        .spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(pointer.x - 11.0),
+                                top: Val::Px(pointer.y - 11.0),
+                                width: Val::Px(22.0),
+                                height: Val::Px(22.0),
+                                border: UiRect::all(Val::Px(2.0)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(binding_color(binding)),
+                            BorderColor::all(Color::WHITE),
+                            GlobalZIndex(1002),
+                            Pickable::IGNORE,
+                            ActionBarDragGhost,
+                            Name::new("Dragged action bar binding"),
+                        ))
+                        .id();
+                    drag.source_slot = Some(source_slot);
+                    drag.ghost = Some(ghost);
+                }
             }
         }
+    }
+
+    if let (Some(pointer), Some(ghost)) = (pointer, drag.ghost) {
+        if let Ok(mut node) = ghosts.get_mut(ghost) {
+            node.left = Val::Px(pointer.x - 11.0);
+            node.top = Val::Px(pointer.y - 11.0);
+        }
+    }
+
+    if !mouse_buttons.just_released(MouseButton::Left) {
+        return;
+    }
+
+    let source_slot = drag.source_slot.take();
+    let target_slot = pointer.and_then(|pointer| state.slot_at(pointer));
+    if let (Some(source_slot), Some(target_slot)) = (source_slot, target_slot) {
+        if source_slot != target_slot && bindings.swap(source_slot, target_slot) {
+            player_commands.write(PlayerCommand::SwapActionBarSlots {
+                first_slot: source_slot as u8,
+                second_slot: target_slot as u8,
+            });
+        }
+    }
+
+    if let Some(ghost) = drag.ghost.take() {
+        commands.entity(ghost).try_despawn();
     }
 }
 
@@ -435,10 +506,14 @@ fn drag_action_bar(
 fn despawn_action_bar(
     mut commands: Commands,
     bars: Query<Entity, With<ActionBarRoot>>,
+    ghosts: Query<Entity, With<ActionBarDragGhost>>,
     mut state: ResMut<ActionBarState>,
+    mut drag: ResMut<ActionBarSlotDrag>,
 ) {
     state.dragging = false;
-    for entity in &bars {
+    drag.source_slot = None;
+    drag.ghost = None;
+    for entity in bars.iter().chain(ghosts.iter()) {
         commands.entity(entity).try_despawn();
     }
 }
@@ -498,14 +573,43 @@ mod tests {
     }
 
     #[test]
-    fn consumables_cannot_replace_the_three_spell_slots() {
+    fn consumables_can_replace_spell_slots_including_f4() {
         let mut bindings = ActionBarBindings::default();
 
-        assert!(!bindings.bind_item(0, crate::shared::gameplay::items::RED_HERB));
+        assert!(bindings.bind_item(0, crate::shared::gameplay::items::RED_HERB));
         assert!(bindings.bind_item(3, crate::shared::gameplay::items::RED_HERB));
+        assert!(bindings.bind_item(4, crate::shared::gameplay::items::RED_HERB));
         assert_eq!(
-            bindings.item(3),
-            Some(crate::shared::gameplay::items::RED_HERB)
+            bindings.binding(3),
+            Some(ActionBarBinding::Item(
+                crate::shared::gameplay::items::RED_HERB
+            ))
+        );
+    }
+
+    #[test]
+    fn dragging_a_spell_to_an_item_slot_swaps_both_bindings() {
+        let mut bindings = ActionBarBindings::default();
+        bindings.bind_item(9, crate::shared::gameplay::items::RED_HERB);
+
+        assert!(bindings.swap(0, 9));
+        assert_eq!(
+            bindings.binding(0),
+            Some(ActionBarBinding::Item(
+                crate::shared::gameplay::items::RED_HERB
+            ))
+        );
+        assert_eq!(bindings.binding(9), Some(ActionBarBinding::Spell(1)));
+    }
+
+    #[test]
+    fn learned_skills_can_replace_any_action_bar_slot() {
+        let mut bindings = ActionBarBindings::default();
+
+        assert!(bindings.bind_skill(3, SkillId(301)));
+        assert_eq!(
+            bindings.binding(3),
+            Some(ActionBarBinding::Skill(SkillId(301)))
         );
     }
 }

@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::{
     color::palettes::css::RED,
     light::ClusteredDecal,
@@ -8,15 +9,20 @@ use bevy::{
 use bevy_asset_loader::prelude::*;
 
 use crate::client::network::movement::{PositionHistory, PredictedMovement, PredictionInputSet};
-use crate::client::presentation::action_bar::ActionBarState;
+use crate::client::presentation::action_bar::{
+    pressed_action_bar_slot, ActionBarBindings, ActionBarState,
+};
+use crate::client::presentation::animations::LastAnimationDirection;
 use crate::client::presentation::casting::{CastingSpell, RequestSpellCast};
-use crate::client::presentation::inventory::InventoryUiState;
+use crate::client::presentation::death::DEATH_SCREEN_Z_INDEX;
+use crate::client::presentation::ui_drag::{pointer_over_draggable_ui, DraggableUi};
 use crate::client::state::*;
 use crate::shared::constants::WATER_LEVEL;
+use crate::shared::gameplay::action_bar::ActionBarBinding;
 use crate::shared::gameplay::components::*;
 use crate::shared::gameplay::entities::{Player, NPC};
 use crate::shared::gameplay::items::{item_definition, GroundItem};
-use crate::shared::gameplay::spells::{spell_definition, SpellTargeting};
+use crate::shared::gameplay::spells::{spell_definition, SpellEffect, SpellTargeting};
 use crate::shared::network::messages::*;
 use crate::shared::states::ClientState;
 use bevy::pbr::ExtendedMaterial;
@@ -30,6 +36,61 @@ const CURSOR_DECAL_SURFACE_OFFSET: f32 = 0.02;
 const CURSOR_GRID_SIZE: f32 = 1.0;
 const CURSOR_GRID_HEIGHT_PROBE_DISTANCE: f32 = 256.0;
 const ENABLE_FORWARD_DECAL_EXPERIMENTS: bool = false;
+const ATTACK_HOLD_SECONDS: f64 = 0.25;
+const AREA_TARGET_SURFACE_OFFSET: f32 = 0.045;
+const GAME_CURSOR_Z_INDEX: i32 = DEATH_SCREEN_Z_INDEX + 1;
+
+#[derive(SystemParam)]
+struct PointerUiStates<'w, 's> {
+    action_bar: Option<Res<'w, ActionBarState>>,
+    draggable_panels: Query<
+        'w,
+        's,
+        (
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+            &'static InheritedVisibility,
+        ),
+        With<DraggableUi>,
+    >,
+    sitting_players: Query<'w, 's, (), (With<ControlledPlayer>, With<Sitting>)>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct PointerHoldState {
+    ground_movement: bool,
+    last_destination: Option<Pos>,
+    held_attack: Option<HeldAttack>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HeldAttack {
+    server_entity: Entity,
+    pressed_at: f64,
+    continuous_requested: bool,
+    persistent: bool,
+}
+
+fn should_issue_held_move(state: &mut PointerHoldState, destination: Pos, new_press: bool) -> bool {
+    if !state.ground_movement {
+        return false;
+    }
+    if !new_press && state.last_destination == Some(destination) {
+        return false;
+    }
+    state.last_destination = Some(destination);
+    true
+}
+
+fn held_attack_should_upgrade(held_attack: &HeldAttack, now: f64) -> bool {
+    !held_attack.continuous_requested
+        && !held_attack.persistent
+        && now - held_attack.pressed_at >= ATTACK_HOLD_SECONDS
+}
+
+fn held_attack_should_stop_on_release(held_attack: &HeldAttack) -> bool {
+    held_attack.continuous_requested && !held_attack.persistent
+}
 
 #[derive(AssetCollection, Resource)]
 struct GridTarget {
@@ -52,12 +113,49 @@ struct GameCursor {
 #[derive(Component)]
 struct GroundItemTooltip;
 
+#[derive(Component)]
+struct PointerOwned;
+
+#[derive(Component, Debug)]
+struct AreaTargetPreview {
+    radius: f32,
+    valid: bool,
+}
+
+#[derive(Resource)]
+struct AreaTargetPreviewMaterials {
+    valid: Handle<StandardMaterial>,
+    invalid: Handle<StandardMaterial>,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum CursorKind {
     Default,
     Attack,
     Pickup,
     Cast { spell_id: u16 },
+}
+
+fn area_spell_preview(spell_id: u16) -> Option<(f32, Option<u32>)> {
+    let definition = spell_definition(spell_id)?;
+    if definition.targeting != SpellTargeting::GroundArea {
+        return None;
+    }
+    let SpellEffect::Damage {
+        area_radius: Some(radius),
+        ..
+    } = definition.effect
+    else {
+        return None;
+    };
+    Some((radius as f32, definition.max_range))
+}
+
+fn area_target_in_range(caster: Vec3, target: Vec3, max_range: Option<u32>) -> bool {
+    max_range.is_none_or(|max_range| {
+        let offset = target - caster;
+        Vec2::new(offset.x, offset.z).length_squared() <= (max_range * max_range) as f32
+    })
 }
 
 fn snap_cursor_to_grid(point: Vec3) -> Vec3 {
@@ -100,6 +198,7 @@ impl Plugin for PointerPlugin {
         app.add_loading_state(
             LoadingState::new(ClientState::Setup).load_collection::<GridTarget>(),
         )
+        .init_resource::<PointerHoldState>()
         //.add_plugins((DecalPlugin))
         .add_systems(
             OnEnter(ClientState::InGame),
@@ -112,7 +211,7 @@ impl Plugin for PointerPlugin {
                 setup_target_decal
             ),
         )
-        .add_systems(Update, draw_gizmos)
+        .add_systems(Update, draw_gizmos.run_if(in_state(ClientState::InGame)))
         .add_systems(
             Update,
             (
@@ -128,11 +227,24 @@ impl Plugin for PointerPlugin {
             (
                 //shape_cast.run_if(in_state(ClientState::InGame)),
                 update_cursor_system_rapier3d.run_if(in_state(ClientState::InGame)),
+                update_area_target_preview
+                    .run_if(in_state(ClientState::InGame))
+                    .after(update_cursor_system_rapier3d),
                 changed_cursor
                     .run_if(in_state(ClientState::InGame))
                     .after(setup_cursor),
             ),
-        );
+        )
+        .add_systems(OnExit(ClientState::InGame), despawn_pointer_owned);
+
+        fn despawn_pointer_owned(
+            mut commands: Commands,
+            entities: Query<Entity, With<PointerOwned>>,
+        ) {
+            for entity in &entities {
+                commands.entity(entity).try_despawn();
+            }
+        }
 
         fn setup_ground_item_tooltip(mut commands: Commands) {
             commands.spawn((
@@ -159,6 +271,7 @@ impl Plugin for PointerPlugin {
                 Visibility::Hidden,
                 Pickable::IGNORE,
                 GroundItemTooltip,
+                PointerOwned,
                 Name::new("Ground item tooltip"),
             ));
         }
@@ -212,23 +325,38 @@ impl Plugin for PointerPlugin {
                 .looking_to(direction, Vec3::Y)
         }
 
-        /// Draws the outlines that show the bounds of the clustered decals.
+        /// Draws the affected radius and center crosshair for a pending AoE cast.
         fn draw_gizmos(
             mut gizmos: Gizmos,
-            decals: Query<(&GlobalTransform), With<ClusteredDecal>>,
+            previews: Query<(&Transform, &AreaTargetPreview, &Visibility)>,
         ) {
-            for (global_transform) in &decals {
-                gizmos.primitive_3d(
-                    &Cuboid {
-                        // Since the clustered decal is a 1×1×1 cube in model space, its
-                        // half-size is half of the scaling part of its transform.
-                        half_size: global_transform.scale() * 0.5,
-                    },
-                    Isometry3d {
-                        rotation: global_transform.rotation(),
-                        translation: global_transform.translation_vec3a(),
-                    },
-                    RED,
+            for (transform, preview, visibility) in &previews {
+                if *visibility == Visibility::Hidden {
+                    continue;
+                }
+                let color = if preview.valid {
+                    Color::srgb(0.18, 0.86, 1.0)
+                } else {
+                    Color::from(RED)
+                };
+                let isometry = Isometry3d::new(transform.translation, transform.rotation);
+                gizmos
+                    .circle(isometry, preview.radius, color)
+                    .resolution(64);
+                gizmos
+                    .circle(isometry, preview.radius * 0.5, color)
+                    .resolution(48);
+                let x_axis = transform.rotation * Vec3::X * preview.radius;
+                let y_axis = transform.rotation * Vec3::Y * preview.radius;
+                gizmos.line(
+                    transform.translation - x_axis,
+                    transform.translation + x_axis,
+                    color,
+                );
+                gizmos.line(
+                    transform.translation - y_axis,
+                    transform.translation + y_axis,
+                    color,
                 );
             }
         }
@@ -250,6 +378,7 @@ impl Plugin for PointerPlugin {
                 },
                 Target,
                 CursorMapPosition::default(),
+                PointerOwned,
                 Name::new("Target"),
                 //Transform::from_scale(Vec3::splat(11.0)),
                 /*Transform {
@@ -258,6 +387,42 @@ impl Plugin for PointerPlugin {
                     scale: Vec3::splat(2.)
                 }*/
                 cursor_decal_transform(Vec3::ZERO, Vec3::Y),
+            ));
+
+            let valid_material = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.05, 0.62, 0.95, 0.22),
+                emissive: LinearRgba::rgb(0.02, 0.22, 0.42),
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            });
+            let invalid_material = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.95, 0.08, 0.06, 0.24),
+                emissive: LinearRgba::rgb(0.42, 0.02, 0.01),
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            });
+            commands.insert_resource(AreaTargetPreviewMaterials {
+                valid: valid_material.clone(),
+                invalid: invalid_material,
+            });
+            commands.spawn((
+                Mesh3d(meshes.add(Circle::new(1.0))),
+                MeshMaterial3d(valid_material),
+                Transform::default(),
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                AreaTargetPreview {
+                    radius: 0.0,
+                    valid: true,
+                },
+                PointerOwned,
+                Name::new("AoE affected area preview"),
             ));
 
             // These were useful while comparing Bevy's two decal paths, but
@@ -547,6 +712,71 @@ impl Plugin for PointerPlugin {
             }
         }
 
+        fn update_area_target_preview(
+            cursors: Query<&GameCursor>,
+            target: Query<
+                (&Transform, &CursorMapPosition),
+                (With<Target>, Without<AreaTargetPreview>),
+            >,
+            caster: Query<
+                &Transform,
+                (
+                    With<ControlledPlayer>,
+                    Without<Target>,
+                    Without<AreaTargetPreview>,
+                ),
+            >,
+            preview_materials: Option<Res<AreaTargetPreviewMaterials>>,
+            mut previews: Query<
+                (
+                    &mut Transform,
+                    &mut Visibility,
+                    &mut AreaTargetPreview,
+                    &mut MeshMaterial3d<StandardMaterial>,
+                ),
+                (Without<Target>, Without<ControlledPlayer>),
+            >,
+        ) {
+            let Ok((mut transform, mut visibility, mut preview, mut material)) =
+                previews.single_mut()
+            else {
+                return;
+            };
+
+            let Some((radius, max_range)) = cursors.single().ok().and_then(|cursor| {
+                let CursorKind::Cast { spell_id } = cursor.action else {
+                    return None;
+                };
+                area_spell_preview(spell_id)
+            }) else {
+                *visibility = Visibility::Hidden;
+                return;
+            };
+
+            let (Ok((target_transform, target_position)), Ok(caster_transform), Some(materials)) =
+                (target.single(), caster.single(), preview_materials)
+            else {
+                *visibility = Visibility::Hidden;
+                return;
+            };
+
+            let surface_normal = (target_transform.rotation * Vec3::Z).normalize_or(Vec3::Y);
+            let valid =
+                area_target_in_range(caster_transform.translation, target_position.0, max_range);
+
+            preview.radius = radius;
+            preview.valid = valid;
+            transform.translation = target_position.0 + surface_normal * AREA_TARGET_SURFACE_OFFSET;
+            transform.rotation = target_transform.rotation;
+            transform.scale = Vec3::new(radius, radius, 1.0);
+            material.0 = if valid {
+                materials.valid.clone()
+            } else {
+                materials.invalid.clone()
+            };
+            *visibility = Visibility::Inherited;
+        }
+
         /*fn update_cursor_system_avian3d(
             primary_window: Query<&Window, With<PrimaryWindow>>,
             mut target_query: Query<&mut Transform, With<Target>>,
@@ -721,7 +951,8 @@ impl Plugin for PointerPlugin {
                         action: CursorKind::Default,
                         hovered_entity: None,
                     },
-                    GlobalZIndex(1000),
+                    PointerOwned,
+                    GlobalZIndex(GAME_CURSOR_Z_INDEX),
                     Pickable::IGNORE,
                 ));
             }
@@ -744,9 +975,12 @@ impl Plugin for PointerPlugin {
             keyboard_input: Res<ButtonInput<KeyCode>>,
             mut player_input: ResMut<LocalPlayerInput>,
             mouse_button_input: Res<ButtonInput<MouseButton>>,
+            time: Res<Time>,
             primary_window: Query<&Window, With<PrimaryWindow>>,
-            action_bar: Option<Res<ActionBarState>>,
-            inventory_ui: Option<Res<InventoryUiState>>,
+            action_bar_bindings: Option<Res<ActionBarBindings>>,
+            ui_states: PointerUiStates,
+            mut pointer_hold: ResMut<PointerHoldState>,
+            network_mapping: Res<NetworkMapping>,
             target_query: Query<&CursorMapPosition, With<Target>>,
             mut player_commands: MessageWriter<PlayerCommand>,
             mut player_entities: Query<
@@ -755,18 +989,90 @@ impl Plugin for PointerPlugin {
                     Option<&mut PredictedMovement>,
                     &PositionHistory,
                     &mut Animation,
+                    &Transform,
+                    &mut Facing,
                 ),
                 With<ControlledPlayer>,
             >,
             mut cursors: Query<&mut GameCursor>,
-            mut network_mapping: ResMut<NetworkMapping>,
             casting_players: Query<(), (With<ControlledPlayer>, With<CastingSpell>)>,
             spell_targets: Query<&Transform, With<Monster>>,
             //interactive_entities: Query<(Entity), ( Or<(With<Player>, With<NPC>, With<Monster>)>)>,
         ) {
+            if keyboard_input.just_pressed(KeyCode::KeyM) {
+                **player_input = PlayerInput::default();
+                pointer_hold.ground_movement = false;
+                pointer_hold.last_destination = None;
+                pointer_hold.held_attack = None;
+                player_commands.write(PlayerCommand::CycleMap);
+                return;
+            }
+
+            if keyboard_input.just_pressed(KeyCode::Insert) {
+                **player_input = PlayerInput::default();
+                pointer_hold.ground_movement = false;
+                pointer_hold.last_destination = None;
+                pointer_hold.held_attack = None;
+                if let Ok(mut cursor) = cursors.single_mut() {
+                    cursor.action = CursorKind::Default;
+                    cursor.hovered_entity = None;
+                }
+                player_commands.write(PlayerCommand::ToggleSitting);
+                return;
+            }
+
+            if !ui_states.sitting_players.is_empty() {
+                **player_input = PlayerInput::default();
+                pointer_hold.ground_movement = false;
+                pointer_hold.last_destination = None;
+                pointer_hold.held_attack = None;
+
+                if mouse_button_input.just_pressed(MouseButton::Left) {
+                    let pointer_over_ui = primary_window
+                        .single()
+                        .ok()
+                        .and_then(Window::cursor_position)
+                        .is_some_and(|pointer_position| {
+                            ui_states
+                                .action_bar
+                                .as_deref()
+                                .is_some_and(|bar| bar.captures_pointer(pointer_position))
+                                || pointer_over_draggable_ui(
+                                    pointer_position,
+                                    &ui_states.draggable_panels,
+                                )
+                        });
+                    if !pointer_over_ui {
+                        if let (
+                            Ok(target_position),
+                            Ok((player_entity, _, _, mut animation, transform, mut facing)),
+                        ) = (target_query.single(), player_entities.single_mut())
+                        {
+                            if let Some(new_facing) =
+                                facing_from_direction(target_position.0 - transform.translation)
+                            {
+                                let world_direction = world_direction_from_facing(new_facing.0);
+                                *facing = new_facing.clone();
+                                *animation = Animation::Sitting;
+                                commands
+                                    .entity(player_entity)
+                                    .insert(LastAnimationDirection(world_direction));
+                                player_commands.write(PlayerCommand::Face {
+                                    target: target_position.0,
+                                });
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
             let movement_locked = !casting_players.is_empty();
             if movement_locked {
                 **player_input = PlayerInput::default();
+                pointer_hold.ground_movement = false;
+                pointer_hold.last_destination = None;
+                pointer_hold.held_attack = None;
             } else {
                 player_input.left = keyboard_input.pressed(KeyCode::KeyA)
                     || keyboard_input.pressed(KeyCode::ArrowLeft);
@@ -778,20 +1084,34 @@ impl Plugin for PointerPlugin {
                     || keyboard_input.pressed(KeyCode::ArrowDown);
             }
 
-            let selected_spell = if keyboard_input.just_pressed(KeyCode::F1) {
-                Some(1)
-            } else if keyboard_input.just_pressed(KeyCode::F2) {
-                Some(2)
-            } else if keyboard_input.just_pressed(KeyCode::F3) {
-                Some(3)
-            } else {
-                None
-            };
+            let selected_spell = pressed_action_bar_slot(&keyboard_input)
+                .and_then(|slot_index| action_bar_bindings.as_deref()?.binding(slot_index))
+                .and_then(|binding| match binding {
+                    ActionBarBinding::Spell(spell_id) => Some(spell_id),
+                    ActionBarBinding::Item(_) | ActionBarBinding::Skill(_) => None,
+                });
 
             if let Some(spell_id) = selected_spell {
-                if let Ok(mut cursor) = cursors.single_mut() {
+                let self_cast = spell_definition(spell_id)
+                    .is_some_and(|definition| definition.targeting == SpellTargeting::SelfOnly);
+                if self_cast {
+                    if let Ok((_, _, _, _, transform, _)) = player_entities.single() {
+                        commands.trigger(RequestSpellCast {
+                            spell_id,
+                            translation: transform.translation,
+                            target_entity: None,
+                        });
+                    }
+                    if let Ok(mut cursor) = cursors.single_mut() {
+                        cursor.action = CursorKind::Default;
+                        cursor.hovered_entity = None;
+                    }
+                } else if let Ok(mut cursor) = cursors.single_mut() {
                     cursor.action = CursorKind::Cast { spell_id };
                     cursor.hovered_entity = None;
+                    pointer_hold.ground_movement = false;
+                    pointer_hold.last_destination = None;
+                    pointer_hold.held_attack = None;
                 }
             }
 
@@ -806,27 +1126,59 @@ impl Plugin for PointerPlugin {
                 }
             }
 
-            if mouse_button_input.just_pressed(MouseButton::Left) {
+            let left_just_pressed = mouse_button_input.just_pressed(MouseButton::Left);
+            let left_pressed = mouse_button_input.pressed(MouseButton::Left);
+            let left_just_released = mouse_button_input.just_released(MouseButton::Left);
+            let now = time.elapsed_secs_f64();
+
+            if left_just_pressed {
+                pointer_hold.held_attack = None;
+            }
+            if left_pressed {
+                if let Some(held_attack) = pointer_hold.held_attack.as_mut() {
+                    if held_attack_should_upgrade(held_attack, now) {
+                        player_commands.write(PlayerCommand::BasicAttack {
+                            entity: held_attack.server_entity,
+                            auto_attack: true,
+                        });
+                        held_attack.continuous_requested = true;
+                    }
+                }
+            }
+            if left_just_released {
+                if pointer_hold
+                    .held_attack
+                    .take()
+                    .is_some_and(|held_attack| held_attack_should_stop_on_release(&held_attack))
+                {
+                    player_commands.write(PlayerCommand::StopBasicAttack);
+                }
+            }
+            if !left_pressed {
+                pointer_hold.ground_movement = false;
+                pointer_hold.last_destination = None;
+            }
+
+            if left_just_pressed || (left_pressed && pointer_hold.ground_movement) {
                 let pointer_over_ui = primary_window
                     .single()
                     .ok()
-                    .and_then(|window| {
-                        window
-                            .cursor_position()
-                            .map(|pointer_position| (window, pointer_position))
-                    })
-                    .is_some_and(|(window, pointer_position)| {
-                        action_bar
+                    .and_then(Window::cursor_position)
+                    .is_some_and(|pointer_position| {
+                        ui_states
+                            .action_bar
                             .as_deref()
                             .is_some_and(|bar| bar.captures_pointer(pointer_position))
-                            || inventory_ui.as_deref().is_some_and(|inventory| {
-                                inventory.captures_pointer(
-                                    pointer_position,
-                                    Vec2::new(window.width(), window.height()),
-                                )
-                            })
+                            || pointer_over_draggable_ui(
+                                pointer_position,
+                                &ui_states.draggable_panels,
+                            )
                     });
                 if pointer_over_ui {
+                    if left_just_pressed {
+                        pointer_hold.ground_movement = false;
+                        pointer_hold.last_destination = None;
+                    }
                     return;
                 }
                 if movement_locked {
@@ -834,24 +1186,47 @@ impl Plugin for PointerPlugin {
                 }
 
                 if let Ok(mut cursor) = cursors.single_mut() {
-                    match cursor.action {
+                    if left_just_pressed {
+                        pointer_hold.ground_movement = matches!(cursor.action, CursorKind::Default);
+                        pointer_hold.last_destination = None;
+                    }
+                    let action = if pointer_hold.ground_movement {
+                        CursorKind::Default
+                    } else {
+                        cursor.action
+                    };
+                    match action {
                         CursorKind::Default => {
                             if let (
                                 Ok(target_position),
-                                Ok((player_entity, prediction, history, mut animation)),
+                                Ok((
+                                    player_entity,
+                                    prediction,
+                                    history,
+                                    mut animation,
+                                    _transform,
+                                    _,
+                                )),
                             ) = (target_query.single(), player_entities.single_mut())
                             {
+                                let mut move_translation = target_position.0;
+                                move_translation.x = move_translation.x.round();
+                                move_translation.z = move_translation.z.round();
+                                let destination =
+                                    Pos(move_translation.x as i32, move_translation.z as i32);
+                                if !should_issue_held_move(
+                                    &mut pointer_hold,
+                                    destination,
+                                    left_just_pressed,
+                                ) {
+                                    return;
+                                }
                                 if target_position.0.y < WATER_LEVEL {
                                     info!("Ignoring movement into submerged terrain");
                                     return;
                                 }
 
-                                let mut move_translation = target_position.0;
-                                move_translation.x = move_translation.x.round();
-                                move_translation.z = move_translation.z.round();
-
-                                player_input.destination_at =
-                                    Some(Pos(move_translation.x as i32, move_translation.z as i32));
+                                player_input.destination_at = Some(destination);
                                 *animation = Animation::Walking;
 
                                 info!("Hay un player entity: {:?}!", player_entity);
@@ -893,8 +1268,17 @@ impl Plugin for PointerPlugin {
 
                                 info!("server entity: {:?}!", server_entity);
                                 if let Some((server_entity)) = server_entity {
+                                    let persistent = keyboard_input.pressed(KeyCode::ControlLeft)
+                                        || keyboard_input.pressed(KeyCode::ControlRight);
                                     player_commands.write(PlayerCommand::BasicAttack {
                                         entity: *server_entity,
+                                        auto_attack: persistent,
+                                    });
+                                    pointer_hold.held_attack = Some(HeldAttack {
+                                        server_entity: *server_entity,
+                                        pressed_at: now,
+                                        continuous_requested: persistent,
+                                        persistent,
                                     });
                                 }
                             }
@@ -917,7 +1301,7 @@ impl Plugin for PointerPlugin {
                                 return;
                             };
                             let direct_target = match definition.targeting {
-                                SpellTargeting::Ground => None,
+                                SpellTargeting::GroundArea => None,
                                 SpellTargeting::DirectMonster => {
                                     let Some(client_entity) = cursor.hovered_entity else {
                                         info!("Spell {spell_id} requires a monster target");
@@ -932,6 +1316,11 @@ impl Plugin for PointerPlugin {
                                         return;
                                     };
                                     Some((server_entity, client_entity))
+                                }
+                                SpellTargeting::SelfOnly => {
+                                    cursor.action = CursorKind::Default;
+                                    cursor.hovered_entity = None;
+                                    return;
                                 }
                             };
 
@@ -966,6 +1355,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn game_cursor_renders_above_the_death_screen() {
+        assert!(GAME_CURSOR_Z_INDEX > DEATH_SCREEN_Z_INDEX);
+    }
+
+    #[test]
     fn cursor_decal_projects_from_behind_the_surface() {
         let surface_point = Vec3::new(3.0, 7.0, -2.0);
         let surface_normal = Vec3::new(0.25, 1.0, -0.4).normalize();
@@ -995,5 +1389,87 @@ mod tests {
         let snapped = snap_cursor_to_grid(Vec3::new(2.49, 7.25, -3.51));
 
         assert_eq!(snapped, Vec3::new(2.0, 7.25, -4.0));
+    }
+
+    #[test]
+    fn area_preview_uses_the_ground_spell_definition() {
+        assert_eq!(area_spell_preview(2), Some((3.0, Some(12))));
+    }
+
+    #[test]
+    fn area_preview_ignores_spells_without_an_affected_radius() {
+        assert_eq!(area_spell_preview(1), None);
+        assert_eq!(area_spell_preview(3), None);
+        assert_eq!(area_spell_preview(4), None);
+    }
+
+    #[test]
+    fn area_preview_range_is_horizontal_and_includes_the_boundary() {
+        let caster = Vec3::new(1.0, 2.0, 1.0);
+
+        assert!(area_target_in_range(
+            caster,
+            Vec3::new(13.0, 50.0, 1.0),
+            Some(12)
+        ));
+        assert!(!area_target_in_range(
+            caster,
+            Vec3::new(13.01, 2.0, 1.0),
+            Some(12)
+        ));
+        assert!(area_target_in_range(
+            caster,
+            Vec3::new(1000.0, 2.0, 1000.0),
+            None
+        ));
+    }
+
+    #[test]
+    fn held_ground_movement_sends_once_per_grid_destination() {
+        let mut state = PointerHoldState {
+            ground_movement: true,
+            ..default()
+        };
+
+        assert!(should_issue_held_move(&mut state, Pos(2, 3), true));
+        assert!(!should_issue_held_move(&mut state, Pos(2, 3), false));
+        assert!(should_issue_held_move(&mut state, Pos(3, 3), false));
+    }
+
+    #[test]
+    fn non_ground_holds_never_issue_movement() {
+        let mut state = PointerHoldState::default();
+
+        assert!(!should_issue_held_move(&mut state, Pos(2, 3), true));
+        assert_eq!(state.last_destination, None);
+    }
+
+    #[test]
+    fn normal_attack_hold_upgrades_after_threshold_and_stops_on_release() {
+        let mut held_attack = HeldAttack {
+            server_entity: Entity::PLACEHOLDER,
+            pressed_at: 10.0,
+            continuous_requested: false,
+            persistent: false,
+        };
+
+        assert!(!held_attack_should_upgrade(&held_attack, 10.249));
+        assert!(held_attack_should_upgrade(&held_attack, 10.25));
+        held_attack.continuous_requested = true;
+        assert!(!held_attack_should_upgrade(&held_attack, 11.0));
+        assert!(held_attack_should_stop_on_release(&held_attack));
+    }
+
+    #[test]
+    fn control_click_auto_attack_persists_after_release() {
+        let held_attack = HeldAttack {
+            server_entity: Entity::PLACEHOLDER,
+            pressed_at: 10.0,
+            continuous_requested: true,
+            persistent: true,
+        };
+
+        assert!(!held_attack_should_upgrade(&held_attack, 11.0));
+        assert!(!held_attack_should_stop_on_release(&held_attack));
     }
 }

@@ -1,0 +1,13 @@
+{$GAME_DOMAIN} {
+    @token path /token
+    handle @token {
+        reverse_proxy server:8080
+    }
+
+    @health path /health
+    handle @health {
+        reverse_proxy server:8080
+    }
+
+    respond "Tribute game server" 200
+}

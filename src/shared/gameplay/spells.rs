@@ -4,31 +4,64 @@ use std::time::Duration;
 pub struct SpellDefinition {
     pub cast_time: Duration,
     pub targeting: SpellTargeting,
-    pub damage: Option<u32>,
+    pub max_range: Option<u32>,
+    pub effect: SpellEffect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpellTargeting {
-    Ground,
+    GroundArea,
     DirectMonster,
+    SelfOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpellEffect {
+    None,
+    Damage {
+        amount: u32,
+        area_radius: Option<u32>,
+    },
+    AttackSpeedBuff {
+        duration: Duration,
+        attack_period_percent: u8,
+    },
 }
 
 pub fn spell_definition(spell_id: u16) -> Option<SpellDefinition> {
     let definition = match spell_id {
         1 => SpellDefinition {
             cast_time: Duration::ZERO,
-            targeting: SpellTargeting::Ground,
-            damage: None,
+            targeting: SpellTargeting::GroundArea,
+            max_range: Some(12),
+            effect: SpellEffect::None,
         },
         2 => SpellDefinition {
             cast_time: Duration::from_secs(4),
-            targeting: SpellTargeting::Ground,
-            damage: None,
+            targeting: SpellTargeting::GroundArea,
+            max_range: Some(12),
+            effect: SpellEffect::Damage {
+                amount: 15,
+                area_radius: Some(3),
+            },
         },
         3 => SpellDefinition {
             cast_time: Duration::from_secs(3),
             targeting: SpellTargeting::DirectMonster,
-            damage: Some(20),
+            max_range: Some(12),
+            effect: SpellEffect::Damage {
+                amount: 20,
+                area_radius: None,
+            },
+        },
+        4 => SpellDefinition {
+            cast_time: Duration::ZERO,
+            targeting: SpellTargeting::SelfOnly,
+            max_range: None,
+            effect: SpellEffect::AttackSpeedBuff {
+                duration: Duration::from_secs(10),
+                attack_period_percent: 70,
+            },
         },
         _ => return None,
     };
@@ -64,7 +97,38 @@ mod tests {
             Some(SpellDefinition {
                 cast_time: Duration::from_secs(3),
                 targeting: SpellTargeting::DirectMonster,
-                damage: Some(20),
+                max_range: Some(12),
+                effect: SpellEffect::Damage {
+                    amount: 20,
+                    area_radius: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn second_spell_is_a_three_unit_ground_area_attack() {
+        assert_eq!(
+            spell_definition(2).unwrap().effect,
+            SpellEffect::Damage {
+                amount: 15,
+                area_radius: Some(3),
+            }
+        );
+    }
+
+    #[test]
+    fn fourth_spell_is_an_instant_ten_second_self_buff() {
+        assert_eq!(
+            spell_definition(4),
+            Some(SpellDefinition {
+                cast_time: Duration::ZERO,
+                targeting: SpellTargeting::SelfOnly,
+                max_range: None,
+                effect: SpellEffect::AttackSpeedBuff {
+                    duration: Duration::from_secs(10),
+                    attack_period_percent: 70,
+                },
             })
         );
     }

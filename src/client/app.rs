@@ -5,33 +5,45 @@ use bevy::core_pipeline::prepass::DepthPrepass;
 use crate::client::assets::*;
 use crate::client::network::clock_sync::*;
 use crate::client::network::movement::*;
-use crate::client::presentation::animations::{AttackSpriteVisual, WalkingSpriteVisual};
-use crate::client::presentation::casting::{
-    ConfirmedSpellCastCompleted, ConfirmedSpellCastStarted,
+use crate::client::presentation::action_bar::ActionBarBindings;
+use crate::client::presentation::animations::{
+    AttackSpriteVisual, LastAnimationDirection, WalkingSpriteVisual,
 };
+use crate::client::presentation::casting::{
+    CastingSpell, ConfirmedSpellCastCompleted, ConfirmedSpellCastStarted,
+};
+use crate::client::presentation::connection_lost::ConnectionLostPlugin;
 use crate::client::presentation::damage_numbers::{DamageNumberEvent, DamageNumbersPlugin};
+use crate::client::presentation::death::DeathPenalty;
+use crate::client::presentation::enemy_fade::{EnemyFadeOut, EnemyFadePlugin, EnemyVisibility};
 use crate::client::presentation::inventory::{falling_ground_item, item_color};
+use crate::client::presentation::job_animations::{JobAnimatedPlayer, JobAnimationsPlugin};
 use crate::client::state::*;
 use crate::shared::constants::*;
 use crate::shared::gameplay::components::*;
-use crate::shared::gameplay::entities::{AttackSpeed, Player};
+use crate::shared::gameplay::entities::{AttackSpeed, MapEntity, Player};
+use crate::shared::gameplay::maps::CurrentMap;
+use crate::shared::network::config::{socket_addr_from_env, DEFAULT_GAME_SERVER_ADDR};
 use crate::shared::network::{channels::*, messages::*};
 use crate::shared::states::ClientState;
-use crate::world::setup_level;
+use crate::world::{replace_client_map, setup_world_lighting};
 use bevy_egui::EguiPlugin;
 use bevy_obj::ObjPlugin;
 use bevy_sprite3d::prelude::*;
-use local_ip_address::local_ip;
-use std::{collections::HashSet, ops::Mul};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Mul,
+};
 
 use crate::client::presentation::health_bars::{BarHeight, BarSettings};
 
+use bevy::ecs::system::SystemParam;
 use bevy::{
     camera::Exposure,
     core_pipeline::tonemapping::Tonemapping,
     light::{
         atmosphere::ScatteringMedium, light_consts::lux, Atmosphere, AtmosphereEnvironmentMapLight,
-        GlobalAmbientLight,
+        GlobalAmbientLight, NotShadowCaster,
     },
     log::LogPlugin,
     pbr::AtmosphereSettings,
@@ -43,11 +55,11 @@ use bevy::{
 use bevy_asset_loader::prelude::*;
 use bevy_renet::netcode::*;
 pub use bevy_renet::netcode::{ClientAuthentication, NetcodeClientPlugin};
-use bevy_renet::{RenetClient, RenetClientPlugin, RenetReceive};
+use bevy_renet::{renet::ClientId, RenetClient, RenetClientPlugin, RenetReceive};
 use std::f32::consts::TAU;
 use std::{
-    net::{SocketAddr, UdpSocket},
-    time::SystemTime,
+    net::UdpSocket,
+    time::{Duration, SystemTime},
 };
 
 use bevy::input::common_conditions::input_toggle_active;
@@ -62,8 +74,19 @@ struct Hovered;
 #[derive(Default, Resource)]
 struct PresentedGroundItems(HashSet<Entity>);
 
+#[derive(Default, Resource)]
+struct PendingPickupAnimations(HashSet<Entity>);
+
 #[derive(Component)]
 struct AtmosphereSun;
+
+#[derive(SystemParam)]
+struct ClientMapParams<'w, 's> {
+    asset_server: Res<'w, AssetServer>,
+    current: ResMut<'w, CurrentClientMap>,
+    entities: Query<'w, 's, Entity, With<MapEntity>>,
+    enemy_visibility: ResMut<'w, EnemyVisibility>,
+}
 
 pub fn run() {
     let mut app: App = App::new();
@@ -98,6 +121,7 @@ pub fn run() {
     .add_plugins(EguiPlugin::default())
     .add_plugins(WorldInspectorPlugin::default().run_if(input_toggle_active(true, KeyCode::Escape)))
     .add_plugins(crate::client::presentation::menu::MenuPlugin)
+    .add_plugins(ConnectionLostPlugin)
     .add_plugins(ObjPlugin)
     .add_plugins(PanOrbitCameraPlugin)
     // .add_plugins(LookTransformPlugin)
@@ -106,6 +130,7 @@ pub fn run() {
     .insert_resource(LocalPlayerInput::default())
     .insert_resource(ClientLobby::default())
     .insert_resource(CameraFacing::default())
+    .insert_resource(CurrentClientMap::default())
     //.insert_resource(avian3d::prelude::SpatialQueryPipeline::default())
     /* .add_plugins((
         PhysicsPlugins::default(),
@@ -116,14 +141,23 @@ pub fn run() {
     .insert_resource(Map::default())
     .insert_resource(NetworkMapping::default())
     .insert_resource(PresentedGroundItems::default())
+    .insert_resource(PendingPickupAnimations::default())
     .add_message::<PlayerCommand>()
     .add_plugins(NetcodeClientPlugin)
     .add_systems(
         Last,
         disconnect_on_window_close.before(close_when_requested),
     )
-    .add_systems(OnEnter(ClientState::InGame), (setup_level, setup_camera))
+    .add_systems(
+        OnEnter(ClientState::InGame),
+        (setup_world_lighting, setup_camera),
+    )
+    .add_systems(OnEnter(ClientState::InMenu), reset_client_session)
     .add_plugins(Sprite3dPlugin)
+    .add_plugins(crate::client::presentation::character_status::CharacterStatusPlugin)
+    .add_plugins(crate::client::presentation::ui_drag::UiDragPlugin)
+    .add_plugins(JobAnimationsPlugin)
+    .add_plugins(EnemyFadePlugin)
     .add_plugins((
         InterpolationPlugin,
         // crate::client::network::clock_sync::ClientClockSyncPlugin,
@@ -131,8 +165,11 @@ pub fn run() {
         crate::client::presentation::animations::AnimationsPlugin,
         crate::client::presentation::casting::CastingPlugin,
         DamageNumbersPlugin,
+        crate::client::presentation::death::DeathScreenPlugin,
+        crate::client::presentation::equipment::EquipmentUiPlugin,
         crate::client::presentation::inventory::InventoryPlugin,
         crate::client::presentation::progression_hud::ProgressionHudPlugin,
+        crate::client::presentation::skill_tree::SkillTreePlugin,
         ClientClockSyncPlugin,
         // crate::client::presentation::music::MusicPlugin,
         crate::client::input::pointer::PointerPlugin,
@@ -144,7 +181,9 @@ pub fn run() {
     .add_systems(
         Update,
         (
-            client_send_input.run_if(in_state(ClientState::InGame)),
+            client_send_input
+                .run_if(in_state(ClientState::InGame))
+                .after(PredictionInputSet),
             client_send_player_commands
                 .run_if(in_state(ClientState::InGame))
                 .after(PredictionInputSet),
@@ -169,61 +208,190 @@ pub fn run() {
     );
     //.add_systems(FixedUpdate, (debug_current_gamemode_state));
 
-    create_renet_transport(&mut app);
-
     app.run();
 }
 
 fn disconnect_on_window_close(
     close_requests: MessageReader<WindowCloseRequested>,
-    mut transport: ResMut<NetcodeClientTransport>,
+    transport: Option<ResMut<NetcodeClientTransport>>,
 ) {
     if !close_requests.is_empty() {
-        info!("Window close requested; notifying the server before exiting");
-        transport.disconnect();
+        if let Some(mut transport) = transport {
+            info!("Window close requested; notifying the server before exiting");
+            transport.disconnect();
+        }
     }
+}
+
+fn reset_client_session(
+    mut commands: Commands,
+    mut lobby: ResMut<ClientLobby>,
+    mut network_mapping: ResMut<NetworkMapping>,
+    mut presented_ground_items: ResMut<PresentedGroundItems>,
+    mut pending_pickup_animations: ResMut<PendingPickupAnimations>,
+    mut enemy_visibility: ResMut<EnemyVisibility>,
+    mut current_map: ResMut<CurrentClientMap>,
+    mut player_input: ResMut<LocalPlayerInput>,
+    mut action_bar_bindings: ResMut<ActionBarBindings>,
+    map_entities: Query<Entity, With<MapEntity>>,
+    fading_enemies: Query<Entity, With<EnemyFadeOut>>,
+    world_view_entities: Query<
+        Entity,
+        Or<(With<Camera3d>, With<Atmosphere>, With<DirectionalLight>)>,
+    >,
+) {
+    let replicated_entities: Vec<_> = network_mapping.0.values().copied().collect();
+    for entity in replicated_entities {
+        commands.entity(entity).try_despawn();
+    }
+    for entity in &map_entities {
+        commands.entity(entity).try_despawn();
+    }
+    for entity in &fading_enemies {
+        commands.entity(entity).try_despawn();
+    }
+    for entity in &world_view_entities {
+        commands.entity(entity).try_despawn();
+    }
+
+    lobby.players.clear();
+    network_mapping.0.clear();
+    presented_ground_items.0.clear();
+    pending_pickup_animations.0.clear();
+    enemy_visibility.clear();
+    current_map.0 = None;
+    **player_input = PlayerInput::default();
+    *action_bar_bindings = ActionBarBindings::default();
+
+    commands.remove_resource::<RenetClient>();
+    commands.remove_resource::<NetcodeClientTransport>();
+    commands.remove_resource::<CurrentClientId>();
 }
 
 fn _debug_current_gamemode_state(state: Res<State<ClientState>>) {
     eprintln!("Current state: {:?}", state.get());
 }
 
-fn create_renet_transport(app: &mut App) {
-    // create client
-    let client = RenetClient::new(connection_config());
-    app.insert_resource(client);
+fn clear_remote_entities_for_map_change(
+    commands: &mut Commands,
+    controlled_server_entity: Entity,
+    client_id: ClientId,
+    lobby: &mut ClientLobby,
+    network_mapping: &mut NetworkMapping,
+    presented_ground_items: &mut PresentedGroundItems,
+    pending_pickup_animations: &mut PendingPickupAnimations,
+    enemy_visibility: &mut EnemyVisibility,
+) {
+    let remote_entities: Vec<_> = network_mapping
+        .0
+        .iter()
+        .filter_map(|(server_entity, client_entity)| {
+            (*server_entity != controlled_server_entity).then_some(*client_entity)
+        })
+        .collect();
+    for entity in remote_entities {
+        commands.entity(entity).despawn();
+    }
+    network_mapping
+        .0
+        .retain(|server_entity, _| *server_entity == controlled_server_entity);
+    lobby
+        .players
+        .retain(|id, player| *id == client_id && player.server_entity == controlled_server_entity);
+    presented_ground_items.0.clear();
+    pending_pickup_animations.0.clear();
+    enemy_visibility.clear();
+}
 
+pub(crate) fn queue_client_connection(commands: &mut Commands) -> Result<u64, String> {
+    let client = RenetClient::new(connection_config());
+
+    load_client_environment();
     let _ = dotenvy::dotenv();
     let current_time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap();
+        .map_err(|error| format!("system clock is unavailable: {error}"))?;
 
-    // Temporary development identity until login and character selection are
-    // implemented. Keeping this stable lets the server reload the same database
-    // character after a restart.
-    let client_id = std::env::var("PLAYER_ACCOUNT_ID")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|id| *id > 0)
-        .unwrap_or(1);
-    info!("Using development player account {client_id}");
+    let (client_id, authentication) = match std::env::var("SERVER_TOKEN_URL") {
+        Ok(url) if !url.trim().is_empty() => request_secure_connect_token(url.trim())?,
+        _ => {
+            let server_addr = socket_addr_from_env("SERVER_ADDR", DEFAULT_GAME_SERVER_ADDR)?;
+            if !server_addr.ip().is_loopback() {
+                return Err(
+                    "Refusing an unencrypted connection to a non-loopback server. Set SERVER_TOKEN_URL to the server's HTTPS /token endpoint."
+                        .to_string(),
+                );
+            }
 
-    let server_addr = SocketAddr::new(local_ip().unwrap(), 42069);
-
-    let authentication = ClientAuthentication::Unsecure {
-        client_id,
-        protocol_id: PROTOCOL_ID,
-        server_addr,
-        user_data: None,
+            let client_id = fastrand::u64(1..=u64::MAX);
+            warn!("Using loopback-only unsecure development networking");
+            (
+                client_id,
+                ClientAuthentication::Unsecure {
+                    client_id,
+                    protocol_id: PROTOCOL_ID,
+                    server_addr,
+                    user_data: None,
+                },
+            )
+        }
     };
+    info!("Using transient network client id {client_id}");
 
-    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|error| format!("could not open a client UDP socket: {error}"))?;
 
-    let transport: NetcodeClientTransport =
-        NetcodeClientTransport::new(current_time, authentication, socket).unwrap();
+    let transport = NetcodeClientTransport::new(current_time, authentication, socket)
+        .map_err(|error| format!("could not initialize network transport: {error}"))?;
 
-    app.insert_resource(transport);
-    app.insert_resource(CurrentClientId(client_id));
+    commands.insert_resource(client);
+    commands.insert_resource(transport);
+    commands.insert_resource(CurrentClientId(client_id));
+    Ok(client_id)
+}
+
+fn load_client_environment() {
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    let Some(directory) = executable.parent() else {
+        return;
+    };
+    let _ = dotenvy::from_path(directory.join("client.env"));
+}
+
+fn request_secure_connect_token(url: &str) -> Result<(u64, ClientAuthentication), String> {
+    let is_local_http = url.starts_with("http://127.0.0.1:")
+        || url.starts_with("http://localhost:")
+        || url.starts_with("http://[::1]:");
+    if !url.starts_with("https://") && !is_local_http {
+        return Err(
+            "SERVER_TOKEN_URL must use HTTPS unless it points to the local machine".to_string(),
+        );
+    }
+
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build();
+    let agent: ureq::Agent = config.into();
+    let mut response = agent
+        .get(url)
+        .header("Accept", "application/octet-stream")
+        .call()
+        .map_err(|error| format!("could not request a secure connection token: {error}"))?;
+    let encoded = response
+        .body_mut()
+        .read_to_vec()
+        .map_err(|error| format!("could not read the secure connection token: {error}"))?;
+    let token = ConnectToken::read(&mut encoded.as_slice())
+        .map_err(|error| format!("the server returned an invalid connection token: {error}"))?;
+    let client_id = token.client_id;
+    Ok((
+        client_id,
+        ClientAuthentication::Secure {
+            connect_token: token,
+        },
+    ))
 }
 
 fn client_send_input(player_input: Res<LocalPlayerInput>, mut client: ResMut<RenetClient>) {
@@ -300,6 +468,7 @@ fn draw_player_sprites(
                 Name::new("PlayerWalkSprite"),
                 Billboard,
                 WalkingSpriteVisual,
+                NotShadowCaster,
             ));
 
             // Attack strips have a different aspect ratio than the walking sheet.
@@ -322,6 +491,7 @@ fn draw_player_sprites(
                 Name::new("PlayerAttackSprite"),
                 Billboard,
                 AttackSpriteVisual,
+                NotShadowCaster,
             ));
         });
 
@@ -333,15 +503,18 @@ fn client_sync_players(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut client_map: ClientMapParams,
     mut client: ResMut<RenetClient>,
     client_id: Res<CurrentClientId>,
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
     mut presented_ground_items: ResMut<PresentedGroundItems>,
-    assets: Res<MyAssets>,
+    mut pending_pickup_animations: ResMut<PendingPickupAnimations>,
+    mut action_bar_bindings: ResMut<ActionBarBindings>,
     chaski: Res<ChaskiAssets>,
     pig_assets: Res<PigAssets>,
     seal_assets: Res<SealAssets>,
+    sitting_entities: Query<(), With<Sitting>>,
     mut entities: Query<(
         &mut PositionHistory,
         &mut AuthoritativePosition,
@@ -352,27 +525,44 @@ fn client_sync_players(
     )>,
 ) {
     let client_id = client_id.0;
+    let mut sitting_updates = HashMap::new();
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages) {
         let server_message = bincode::deserialize(&message).unwrap();
         match server_message {
             ServerMessages::PlayerCreate {
                 id,
                 character_id,
+                map_name,
                 translation,
                 facing,
                 health,
                 mana,
                 progression,
+                job_progression,
                 entity,
                 attack_speed,
+                sitting,
                 server_time,
             } => {
                 println!("Player {} connected at translation  {:?}", id, translation);
+
+                if client_id == id {
+                    let loaded_map = replace_client_map(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        &client_map.asset_server,
+                        &client_map.entities,
+                        &map_name,
+                    );
+                    client_map.current.0 = Some(loaded_map.to_string());
+                }
 
                 let texture_atlas = TextureAtlas {
                     layout: chaski.layout.clone(),
                     index: 0,
                 };
+                let is_dead = health.current == 0;
 
                 let mut client_entity = commands.spawn((
                     Mesh3d(meshes.add(Mesh::from(Capsule3d::new(0.5, 1.)))),
@@ -385,6 +575,9 @@ fn client_sync_players(
                     health,
                     mana,
                     progression,
+                    job_progression,
+                    JobAnimatedPlayer,
+                    NotShadowCaster,
                     Animation::Idle,
                     AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
                     //RigidBody::Kinematic,
@@ -394,12 +587,23 @@ fn client_sync_players(
                 client_entity.insert((
                     Player { id },
                     character_id,
+                    CurrentMap(map_name),
                     AttackSpeed(attack_speed),
                     GameVelocity::default(),
                     facing,
                     PositionHistory::new(translation.into(), server_time),
                     AuthoritativePosition::new(translation.into(), server_time),
                 ));
+                let pending_pickup = pending_pickup_animations.0.remove(&entity);
+                if is_dead {
+                    client_entity.insert((Dead, DeathPenalty(0)));
+                } else if sitting {
+                    client_entity.insert((Sitting, Animation::Sitting));
+                } else if pending_pickup {
+                    client_entity.insert(
+                        crate::client::presentation::job_animations::JobAnimationOverride::pickup(),
+                    );
+                }
 
                 if client_id == id {
                     client_entity.insert(ControlledPlayer).insert((
@@ -421,8 +625,6 @@ fn client_sync_players(
                         },
                     ));
                     //.insert(Billboard)
-                    //.insert(NotShadowCaster)
-
                     #[cfg(feature = "client_prediction")]
                     client_entity
                         .insert((PredictedMovement::default(), player_character_controller()));
@@ -449,10 +651,16 @@ fn client_sync_players(
                     if let Ok(_entity_exists) = commands.get_entity(client_entity) {
                         commands.entity(client_entity).despawn();
                         network_mapping.0.remove(&server_entity);
+                        pending_pickup_animations.0.remove(&server_entity);
                     }
                 }
             }
             ServerMessages::MovementRejected {
+                entity,
+                translation,
+                server_time,
+            }
+            | ServerMessages::MovementInterrupted {
                 entity,
                 translation,
                 server_time,
@@ -485,7 +693,7 @@ fn client_sync_players(
                     controller.translation = None;
                 }
                 commands.entity(*client_entity).insert(Animation::Idle);
-                warn!("Server rejected movement; restored authoritative position");
+                info!("Server stopped movement; restored authoritative position");
             }
             ServerMessages::SpawnProjectile {
                 entity,
@@ -581,6 +789,19 @@ fn client_sync_players(
                 translation,
                 server_time,
             } => {
+                client_map.enemy_visibility.mark_visible(entity);
+                if let Some(previous_replica) = network_mapping.0.get(&entity).copied() {
+                    commands
+                        .entity(previous_replica)
+                        .insert((
+                            Transform::from_translation(translation.into()),
+                            PositionHistory::new(translation.into(), server_time),
+                            AuthoritativePosition::new(translation.into(), server_time),
+                            GameVelocity::default(),
+                        ))
+                        .remove::<EnemyFadeOut>();
+                    continue;
+                }
                 let texture_atlas: TextureAtlas = match kind {
                     MonsterKind::Pig => TextureAtlas {
                         layout: pig_assets.layout.clone(),
@@ -634,34 +855,32 @@ fn client_sync_players(
                 health,
                 server_time,
             } => {
-                let (placeholder_color, monster_name) = match sprite_id.0 {
-                    AGGRESSIVE_MONSTER_PLACEHOLDER_SPRITE => {
-                        (Color::srgb(1.0, 0.32, 0.25), "Aggressive Pig")
+                client_map.enemy_visibility.mark_visible(entity);
+                if let Some(previous_replica) = network_mapping.0.get(&entity).copied() {
+                    let mut replica = commands.entity(previous_replica);
+                    replica
+                        .insert((
+                            Transform::from_translation(translation.into()),
+                            PositionHistory::new(translation.into(), server_time),
+                            AuthoritativePosition::new(translation.into(), server_time),
+                            GameVelocity::default(),
+                            facing,
+                        ))
+                        .remove::<EnemyFadeOut>();
+                    if let Some(health) = health {
+                        replica.insert(health);
                     }
+                    continue;
+                }
+                let monster_name = match sprite_id.0 {
+                    AGGRESSIVE_MONSTER_PLACEHOLDER_SPRITE => "Aggressive Monster (Red Cube)",
                     SPELL_REACTIVE_MONSTER_PLACEHOLDER_SPRITE => {
-                        (Color::srgb(0.48, 0.38, 1.0), "Spell-Reactive Pig")
+                        "Spell-Reactive Monster (Purple Sphere)"
                     }
-                    _ => (Color::WHITE, "Pig"),
-                };
-                let texture_atlas: TextureAtlas = TextureAtlas {
-                    layout: seal_assets.layout.clone(),
-                    index: 58,
+                    _ => "Passive Monster",
                 };
 
                 let mut client_entity = commands.spawn((
-                    Sprite3d {
-                        pixels_per_metre: 25.,
-                        alpha_mode: AlphaMode::Blend,
-                        unlit: true,
-                        // pivot: Some(Vec2::new(0.5, 0.5)),
-                        ..default()
-                    },
-                    Sprite {
-                        image: seal_assets.sprite.clone(),
-                        texture_atlas: Some(texture_atlas.clone()),
-                        color: placeholder_color,
-                        ..default()
-                    },
                     Transform::from_translation(translation.into()),
                     MonsterKind::Pig,
                     Collider::capsule_y(0.5, 0.5),
@@ -681,7 +900,50 @@ fn client_sync_players(
                     Name::new(monster_name),
                 ));
 
-                println!("PIG SPAWNED AT  {:?} ", translation);
+                match sprite_id.0 {
+                    AGGRESSIVE_MONSTER_PLACEHOLDER_SPRITE => {
+                        let color = Color::srgb(1.0, 0.04, 0.02);
+                        client_entity.insert((
+                            Mesh3d(meshes.add(Mesh::from(Cuboid::new(1.35, 1.35, 1.35)))),
+                            MeshMaterial3d(materials.add(StandardMaterial {
+                                base_color: color,
+                                emissive: LinearRgba::from(color) * 0.8,
+                                ..default()
+                            })),
+                        ));
+                    }
+                    SPELL_REACTIVE_MONSTER_PLACEHOLDER_SPRITE => {
+                        let color = Color::srgb(0.55, 0.08, 1.0);
+                        client_entity.insert((
+                            Mesh3d(meshes.add(Mesh::from(Sphere::new(0.78)))),
+                            MeshMaterial3d(materials.add(StandardMaterial {
+                                base_color: color,
+                                emissive: LinearRgba::from(color) * 0.8,
+                                ..default()
+                            })),
+                        ));
+                    }
+                    _ => {
+                        client_entity.insert((
+                            Sprite3d {
+                                pixels_per_metre: 25.,
+                                alpha_mode: AlphaMode::Blend,
+                                unlit: true,
+                                ..default()
+                            },
+                            Sprite {
+                                image: seal_assets.sprite.clone(),
+                                texture_atlas: Some(TextureAtlas {
+                                    layout: seal_assets.layout.clone(),
+                                    index: 58,
+                                }),
+                                ..default()
+                            },
+                        ));
+                    }
+                }
+
+                println!("{monster_name} spawned at {translation:?}");
 
                 println!("Client entity  {:?} ", client_entity.id());
 
@@ -706,8 +968,20 @@ fn client_sync_players(
             }
             ServerMessages::DespawnEntity { entity } => {
                 println!("Entity despawned {:?} ", entity);
-                if let Some(client_entity) = network_mapping.0.remove(&entity) {
-                    commands.entity(client_entity).try_despawn();
+                pending_pickup_animations.0.remove(&entity);
+                if let Some(client_entity) = network_mapping.0.get(&entity).copied() {
+                    if client_map.enemy_visibility.is_known_enemy(entity) {
+                        if !client_map.enemy_visibility.mark_hidden(entity) {
+                            continue;
+                        }
+                        commands
+                            .entity(client_entity)
+                            .insert(EnemyFadeOut::new(entity))
+                            .remove::<BarSettings<Health>>();
+                    } else {
+                        network_mapping.0.remove(&entity);
+                        commands.entity(client_entity).try_despawn();
+                    }
                     lobby
                         .players
                         .retain(|_, player_info| player_info.server_entity != entity);
@@ -721,22 +995,196 @@ fn client_sync_players(
             } => {
                 // println!("Cambio el HP {}, {} ", max, current);
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    let is_player = lobby
+                        .players
+                        .values()
+                        .any(|player| player.client_entity == *client_entity);
+                    let mut client_entity_commands = commands.entity(*client_entity);
+                    client_entity_commands.insert(Health { max, current });
+                    if current == 0 && is_player {
+                        client_entity_commands
+                            .insert(Dead)
+                            .remove::<Sitting>()
+                            .remove::<Walking>()
+                            .remove::<Attacking>()
+                            .remove::<CastingSpell>()
+                            .remove::<BarSettings<CastingSpell>>();
+                    }
+                }
+            }
+            ServerMessages::ManaChange {
+                entity,
+                max,
+                current,
+            } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
                     commands
                         .entity(*client_entity)
-                        .insert(Health { max, current });
+                        .insert(Mana { max, current });
                 }
             }
             ServerMessages::ProgressionChanged {
                 entity,
                 progression,
+                job_progression,
             } => {
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
-                    commands.entity(*client_entity).insert(progression);
+                    commands
+                        .entity(*client_entity)
+                        .insert((progression, job_progression));
+                }
+            }
+            ServerMessages::PlayerDied {
+                entity,
+                experience_lost,
+            } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands
+                        .entity(*client_entity)
+                        .insert((Dead, DeathPenalty(experience_lost)))
+                        .remove::<Sitting>()
+                        .remove::<Walking>()
+                        .remove::<Attacking>()
+                        .remove::<CastingSpell>()
+                        .remove::<BarSettings<CastingSpell>>();
+                }
+            }
+            ServerMessages::PlayerRespawned {
+                entity,
+                map_name,
+                translation,
+                health,
+                mana,
+                server_time,
+            } => {
+                let is_controlled = lobby
+                    .players
+                    .get(&client_id)
+                    .is_some_and(|player| player.server_entity == entity);
+                if is_controlled {
+                    clear_remote_entities_for_map_change(
+                        &mut commands,
+                        entity,
+                        client_id,
+                        &mut lobby,
+                        &mut network_mapping,
+                        &mut presented_ground_items,
+                        &mut pending_pickup_animations,
+                        &mut client_map.enemy_visibility,
+                    );
+                    let loaded_map = replace_client_map(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        &client_map.asset_server,
+                        &client_map.entities,
+                        &map_name,
+                    );
+                    client_map.current.0 = Some(loaded_map.to_string());
+                }
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    let translation = Vec3::from(translation);
+                    commands
+                        .entity(*client_entity)
+                        .insert((
+                            Transform::from_translation(translation),
+                            PositionHistory::new(translation, server_time),
+                            AuthoritativePosition::new(translation, server_time),
+                            GameVelocity::default(),
+                            health,
+                            mana,
+                            CurrentMap(map_name),
+                            Animation::Idle,
+                        ))
+                        .remove::<Dead>()
+                        .remove::<Sitting>()
+                        .remove::<DeathPenalty>()
+                        .remove::<Walking>()
+                        .remove::<Attacking>();
+                }
+            }
+            ServerMessages::MapChanged {
+                entity,
+                map_name,
+                translation,
+                server_time,
+            } => {
+                let is_controlled = lobby
+                    .players
+                    .get(&client_id)
+                    .is_some_and(|player| player.server_entity == entity);
+                if !is_controlled {
+                    continue;
+                }
+                clear_remote_entities_for_map_change(
+                    &mut commands,
+                    entity,
+                    client_id,
+                    &mut lobby,
+                    &mut network_mapping,
+                    &mut presented_ground_items,
+                    &mut pending_pickup_animations,
+                    &mut client_map.enemy_visibility,
+                );
+                let loaded_map = replace_client_map(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &client_map.asset_server,
+                    &client_map.entities,
+                    &map_name,
+                );
+                client_map.current.0 = Some(loaded_map.to_string());
+
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    let position = Vec3::from(translation);
+                    commands
+                        .entity(*client_entity)
+                        .insert((
+                            Transform::from_translation(position),
+                            PositionHistory::new(position, server_time),
+                            AuthoritativePosition::new(position, server_time),
+                            GameVelocity::default(),
+                            CurrentMap(map_name),
+                            Animation::Idle,
+                        ))
+                        .remove::<Sitting>()
+                        .remove::<Walking>()
+                        .remove::<Attacking>()
+                        .remove::<CastingSpell>()
+                        .remove::<BarSettings<CastingSpell>>();
                 }
             }
             ServerMessages::InventoryUpdated { entity, inventory } => {
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
                     commands.entity(*client_entity).insert(inventory);
+                }
+            }
+            ServerMessages::ItemPickedUp { entity } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.entity(*client_entity).insert(
+                        crate::client::presentation::job_animations::JobAnimationOverride::pickup(),
+                    );
+                } else {
+                    pending_pickup_animations.0.insert(entity);
+                }
+            }
+            ServerMessages::EquipmentUpdated { entity, equipment } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.entity(*client_entity).insert(equipment);
+                }
+            }
+            ServerMessages::ActionBarUpdated { action_bar } => {
+                action_bar_bindings.replace(action_bar);
+            }
+            ServerMessages::SkillTreeUpdated { skill_tree } => {
+                if let Some(player) = lobby.players.get(&client_id) {
+                    commands.entity(player.client_entity).insert(skill_tree);
+                }
+            }
+            ServerMessages::CharacterStatsUpdated { entity, stats } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    commands.entity(*client_entity).insert(stats);
                 }
             }
             ServerMessages::DamageNumber { entity, amount } => {
@@ -773,33 +1221,115 @@ fn client_sync_players(
             }
             ServerMessages::AttackStopped { entity } => {
                 if let Some(client_entity) = network_mapping.0.get(&entity) {
-                    commands.entity(*client_entity).insert(Animation::Idle);
+                    let sitting = sitting_updates
+                        .get(&entity)
+                        .copied()
+                        .unwrap_or_else(|| sitting_entities.contains(*client_entity));
+                    let animation = if sitting {
+                        Animation::Sitting
+                    } else {
+                        Animation::Idle
+                    };
+                    commands.entity(*client_entity).insert(animation);
+                }
+            }
+            ServerMessages::SittingChanged { entity, sitting } => {
+                sitting_updates.insert(entity, sitting);
+                let Some(client_entity) = network_mapping.0.get(&entity).copied() else {
+                    continue;
+                };
+                if let Ok((_, _, _, mut velocity, prediction, controller)) =
+                    entities.get_mut(client_entity)
+                {
+                    velocity.0 = Vec3::ZERO;
+                    if let Some(mut prediction) = prediction {
+                        prediction.destination = None;
+                    }
+                    if let Some(mut controller) = controller {
+                        controller.translation = None;
+                    }
+                }
+
+                let mut player = commands.entity(client_entity);
+                player.remove::<Walking>().remove::<Attacking>();
+                if sitting {
+                    player.insert((Sitting, Animation::Sitting));
+                } else {
+                    player.remove::<Sitting>().insert(Animation::Idle);
+                }
+            }
+            ServerMessages::FacingChanged { entity, facing } => {
+                if let Some(client_entity) = network_mapping.0.get(&entity) {
+                    let world_direction = world_direction_from_facing(facing.0);
+                    commands
+                        .entity(*client_entity)
+                        .insert((facing, LastAnimationDirection(world_direction)));
                 }
             }
         }
     }
 
     while let Some(message) = client.receive_message(ServerChannel::NetworkedEntities) {
-        let Ok(snapshot) = bincode::deserialize::<EntitySnapshot>(&message) else {
-            warn!("Ignoring malformed position snapshot");
-            continue;
-        };
+        #[cfg(not(feature = "batched_position_snapshots"))]
+        {
+            let Ok(snapshot) = bincode::deserialize::<EntitySnapshot>(&message) else {
+                warn!("Ignoring malformed position snapshot");
+                continue;
+            };
 
-        let Some(client_entity) = network_mapping.0.get(&snapshot.entity) else {
-            continue;
-        };
-        let Ok((mut history, mut authoritative, _, _, _, _)) = entities.get_mut(*client_entity)
-        else {
-            continue;
-        };
-
-        let position = IVec3::new(snapshot.x, snapshot.y, snapshot.z)
-            .as_vec3()
-            .mul(TRANSLATION_PRECISION);
-        if history.add_absolute_position(position, snapshot.server_time) {
-            authoritative.position = position;
-            authoritative.timestamp = snapshot.server_time;
+            apply_position_snapshot(
+                &network_mapping,
+                &mut entities,
+                snapshot.entity,
+                IVec3::new(snapshot.x, snapshot.y, snapshot.z),
+                snapshot.server_time,
+            );
         }
+
+        #[cfg(feature = "batched_position_snapshots")]
+        {
+            let Ok(batch) = bincode::deserialize::<EntitySnapshotBatch>(&message) else {
+                warn!("Ignoring malformed position snapshot batch");
+                continue;
+            };
+            for snapshot in batch.snapshots {
+                apply_position_snapshot(
+                    &network_mapping,
+                    &mut entities,
+                    snapshot.entity,
+                    IVec3::new(snapshot.x, snapshot.y, snapshot.z),
+                    batch.server_time,
+                );
+            }
+        }
+    }
+}
+
+fn apply_position_snapshot(
+    network_mapping: &NetworkMapping,
+    entities: &mut Query<(
+        &mut PositionHistory,
+        &mut AuthoritativePosition,
+        &mut Transform,
+        &mut GameVelocity,
+        Option<&mut PredictedMovement>,
+        Option<&mut KinematicCharacterController>,
+    )>,
+    server_entity: Entity,
+    quantized_position: IVec3,
+    server_time: u128,
+) {
+    let Some(client_entity) = network_mapping.0.get(&server_entity) else {
+        return;
+    };
+    let Ok((mut history, mut authoritative, _, _, _, _)) = entities.get_mut(*client_entity) else {
+        return;
+    };
+
+    let position = quantized_position.as_vec3().mul(TRANSLATION_PRECISION);
+    if history.add_absolute_position(position, server_time) {
+        authoritative.position = position;
+        authoritative.timestamp = server_time;
     }
 }
 

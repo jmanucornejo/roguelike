@@ -13,11 +13,13 @@ pub enum ClientChannel {
     Input,
     Command,
     SyncTimeRequest,
+    Account,
 }
 pub enum ServerChannel {
     ServerMessages,
     NetworkedEntities,
     SyncTimeResponse,
+    Account,
 }
 
 impl From<ClientChannel> for u8 {
@@ -26,6 +28,7 @@ impl From<ClientChannel> for u8 {
             ClientChannel::Command => 0,
             ClientChannel::Input => 1,
             ClientChannel::SyncTimeRequest => 2,
+            ClientChannel::Account => 3,
         }
     }
 }
@@ -50,6 +53,13 @@ impl ClientChannel {
                 max_memory_usage_bytes: 5 * 1024 * 1024,
                 send_type: SendType::Unreliable,
             },
+            ChannelConfig {
+                channel_id: Self::Account.into(),
+                max_memory_usage_bytes: 1024 * 1024,
+                send_type: SendType::ReliableOrdered {
+                    resend_time: Duration::from_millis(200),
+                },
+            },
         ]
     }
 }
@@ -60,6 +70,7 @@ impl From<ServerChannel> for u8 {
             ServerChannel::NetworkedEntities => 0,
             ServerChannel::ServerMessages => 1,
             ServerChannel::SyncTimeResponse => 2,
+            ServerChannel::Account => 3,
         }
     }
 }
@@ -83,6 +94,13 @@ impl ServerChannel {
                 channel_id: Self::SyncTimeResponse.into(),
                 max_memory_usage_bytes: 10 * 1024 * 1024,
                 send_type: SendType::Unreliable,
+            },
+            ChannelConfig {
+                channel_id: Self::Account.into(),
+                max_memory_usage_bytes: 1024 * 1024,
+                send_type: SendType::ReliableOrdered {
+                    resend_time: Duration::from_millis(200),
+                },
             },
         ]
     }

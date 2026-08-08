@@ -32,3 +32,6 @@ pub struct RenderTime(pub u128);
 
 #[derive(Debug, Default, Resource)]
 pub struct CameraFacing(pub u8);
+
+#[derive(Debug, Default, Resource)]
+pub(super) struct CurrentClientMap(pub(super) Option<String>);

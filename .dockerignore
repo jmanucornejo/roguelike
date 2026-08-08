@@ -1,0 +1,10 @@
+target
+.git
+.env
+client.env
+docker/mysql
+assets/spritesheets
+assets/music
+assets/sounds
+assets/models
+*.pdb

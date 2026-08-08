@@ -1,10 +1,11 @@
 use crate::shared::constants::*;
+use crate::shared::gameplay::maps::MAP_DEFINITIONS;
 use crate::shared::gameplay::{components::*, entities::MapEntity};
-use crate::world::setup_level;
+use crate::world::setup_server_level;
 use bevy::{camera::primitives::MeshAabb, prelude::*};
 use bevy_rapier3d::prelude::*;
 use pathfinding::prelude::{astar, bfs};
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 pub struct PathingPlugin;
 
@@ -13,8 +14,44 @@ pub struct TargetPos {
     pub position: Vec3,
 }
 
-const WATER_NAV_MIN_CELL: i32 = -150;
-const WATER_NAV_MAX_CELL: i32 = 150;
+pub const DAMAGE_WALK_DELAY_DURATION: Duration = Duration::from_millis(200);
+pub const DAMAGE_WALK_DELAY_IMMUNITY_DURATION: Duration = Duration::from_millis(400);
+
+#[derive(Component, Debug)]
+pub struct DamageWalkDelay {
+    timer: Timer,
+    pending_destination: Option<Vec3>,
+}
+
+impl DamageWalkDelay {
+    pub fn new(pending_destination: Option<Vec3>) -> Self {
+        Self {
+            timer: Timer::new(DAMAGE_WALK_DELAY_DURATION, TimerMode::Once),
+            pending_destination,
+        }
+    }
+
+    pub fn queue_destination(&mut self, destination: Vec3) {
+        self.pending_destination = Some(destination);
+    }
+
+    pub fn cancel_pending_destination(&mut self) {
+        self.pending_destination = None;
+    }
+}
+
+#[derive(Component, Debug)]
+pub struct DamageWalkDelayImmunity(Timer);
+
+impl Default for DamageWalkDelayImmunity {
+    fn default() -> Self {
+        Self(Timer::new(
+            DAMAGE_WALK_DELAY_IMMUNITY_DURATION,
+            TimerMode::Once,
+        ))
+    }
+}
+
 const WATER_NAV_COLUMNS_PER_TICK: i32 = 8;
 const WATER_HEIGHT_RAY_ORIGIN: f32 = 128.0;
 const WATER_HEIGHT_RAY_DISTANCE: f32 = 256.0;
@@ -22,6 +59,7 @@ const WAYPOINT_REACHED_DISTANCE: f32 = 0.05;
 
 #[derive(Resource)]
 struct WaterNavigationBuilder {
+    map_index: usize,
     next_x: i32,
     started: bool,
     finished: bool,
@@ -30,7 +68,8 @@ struct WaterNavigationBuilder {
 impl Default for WaterNavigationBuilder {
     fn default() -> Self {
         Self {
-            next_x: WATER_NAV_MIN_CELL,
+            map_index: 0,
+            next_x: MAP_DEFINITIONS[0].navigation_min[0],
             started: false,
             finished: false,
         }
@@ -61,6 +100,45 @@ fn stop_walking_system(
     }
 }
 
+fn tick_damage_walk_delays(
+    time: Res<Time>,
+    map: Res<Map>,
+    mut delayed: Query<(Entity, &Transform, &mut DamageWalkDelay, Option<&Dead>)>,
+    mut immunities: Query<(Entity, &mut DamageWalkDelayImmunity)>,
+    mut commands: Commands,
+) {
+    for (entity, transform, mut delay, dead) in &mut delayed {
+        if !delay.timer.tick(time.delta()).just_finished() {
+            continue;
+        }
+
+        let pending_destination = delay.pending_destination.take();
+        commands.entity(entity).try_remove::<DamageWalkDelay>();
+        if dead.is_some() {
+            continue;
+        }
+
+        let Some(destination) = pending_destination else {
+            continue;
+        };
+        if let Some(path) = get_path_between_translations(transform.translation, destination, &map)
+        {
+            commands.entity(entity).try_insert(Walking {
+                target_translation: destination,
+                path: Some(path),
+            });
+        }
+    }
+
+    for (entity, mut immunity) in &mut immunities {
+        if immunity.0.tick(time.delta()).just_finished() {
+            commands
+                .entity(entity)
+                .try_remove::<DamageWalkDelayImmunity>();
+        }
+    }
+}
+
 impl Plugin for PathingPlugin {
     fn build(&self, app: &mut App) {
         // add things to your app here
@@ -68,9 +146,9 @@ impl Plugin for PathingPlugin {
             .add_systems(
                 Startup,
                 (
-                    setup_prohibited_areas.after(setup_level),
-                    setup_prohibited_cells.after(setup_level),
-                    setup_gravity.after(setup_level),
+                    setup_prohibited_areas.after(setup_server_level),
+                    setup_prohibited_cells.after(setup_server_level),
+                    setup_gravity.after(setup_server_level),
                 ),
             )
             .add_systems(
@@ -96,6 +174,7 @@ impl Plugin for PathingPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    tick_damage_walk_delays,
                     walking_system,
                     stop_walking_system,
                     get_velocity,
@@ -178,11 +257,24 @@ impl Plugin for PathingPlugin {
         }
 
         pub fn walking_system(
-            mut walking_entities: Query<(Entity, &Transform, &mut Walking)>,
+            mut walking_entities: Query<(
+                Entity,
+                &Transform,
+                &mut Walking,
+                Option<&DamageWalkDelay>,
+            )>,
             mut commands: Commands,
             //map: Res<Map>
         ) {
-            for (entity, transform, mut walking) in walking_entities.iter_mut() {
+            for (entity, transform, mut walking, damage_walk_delay) in walking_entities.iter_mut() {
+                if damage_walk_delay.is_some() {
+                    commands
+                        .entity(entity)
+                        .try_remove::<Walking>()
+                        .try_remove::<TargetPos>();
+                    continue;
+                }
+
                 /*info!("1. Ta parado en: {:?},  {:?}", Pos(
                     transform.translation.x.round() as i32,
                     transform.translation.z.round() as i32
@@ -276,59 +368,88 @@ fn build_water_navigation(
             return;
         }
 
-        let terrain_is_in_physics_world = [
-            Vec2::ZERO,
-            Vec2::new(75.0, 75.0),
-            Vec2::new(-75.0, -75.0),
-            Vec2::new(75.0, -75.0),
-            Vec2::new(-75.0, 75.0),
-        ]
-        .into_iter()
-        .any(|sample| {
-            rapier_context
-                .cast_ray(
-                    Vec3::new(sample.x, WATER_HEIGHT_RAY_ORIGIN, sample.y),
-                    Vec3::NEG_Y,
-                    WATER_HEIGHT_RAY_DISTANCE,
-                    true,
-                    QueryFilter::only_fixed().exclude_sensors(),
-                )
-                .is_some_and(|(entity, _)| terrain_colliders.contains(&entity))
+        let terrain_is_in_physics_world = MAP_DEFINITIONS.iter().all(|definition| {
+            let origin = Vec3::from_array(definition.server_origin);
+            let quarter_x =
+                (definition.navigation_max[0] - definition.navigation_min[0]) as f32 * 0.25;
+            let quarter_z =
+                (definition.navigation_max[1] - definition.navigation_min[1]) as f32 * 0.25;
+            [
+                Vec2::ZERO,
+                Vec2::new(quarter_x, quarter_z),
+                Vec2::new(-quarter_x, -quarter_z),
+                Vec2::new(quarter_x, -quarter_z),
+                Vec2::new(-quarter_x, quarter_z),
+            ]
+            .into_iter()
+            .any(|sample| {
+                rapier_context
+                    .cast_ray(
+                        Vec3::new(
+                            origin.x + sample.x,
+                            origin.y + WATER_HEIGHT_RAY_ORIGIN,
+                            origin.z + sample.y,
+                        ),
+                        Vec3::NEG_Y,
+                        WATER_HEIGHT_RAY_DISTANCE,
+                        true,
+                        QueryFilter::only_fixed().exclude_sensors(),
+                    )
+                    .is_some_and(|(entity, _)| terrain_colliders.contains(&entity))
+            })
         });
 
         if !terrain_is_in_physics_world {
             return;
         }
         builder.started = true;
-        info!("Building submerged navigation cells");
+        info!(
+            "Building navigation cells for {} maps",
+            MAP_DEFINITIONS.len()
+        );
     }
 
-    let end_x = (builder.next_x + WATER_NAV_COLUMNS_PER_TICK - 1).min(WATER_NAV_MAX_CELL);
-    for x in builder.next_x..=end_x {
-        for z in WATER_NAV_MIN_CELL..=WATER_NAV_MAX_CELL {
+    let definition = &MAP_DEFINITIONS[builder.map_index];
+    let origin = Vec3::from_array(definition.server_origin);
+    let end_x = (builder.next_x + WATER_NAV_COLUMNS_PER_TICK - 1).min(definition.navigation_max[0]);
+    for local_x in builder.next_x..=end_x {
+        for local_z in definition.navigation_min[1]..=definition.navigation_max[1] {
+            let x = origin.x.round() as i32 + local_x;
+            let z = origin.z.round() as i32 + local_z;
             let surface_height = rapier_context
                 .cast_ray(
-                    Vec3::new(x as f32, WATER_HEIGHT_RAY_ORIGIN, z as f32),
+                    Vec3::new(x as f32, origin.y + WATER_HEIGHT_RAY_ORIGIN, z as f32),
                     Vec3::NEG_Y,
                     WATER_HEIGHT_RAY_DISTANCE,
                     true,
                     QueryFilter::only_fixed().exclude_sensors(),
                 )
-                .map(|(_, time_of_impact)| WATER_HEIGHT_RAY_ORIGIN - time_of_impact);
+                .map(|(_, time_of_impact)| origin.y + WATER_HEIGHT_RAY_ORIGIN - time_of_impact);
 
-            if surface_is_submerged(surface_height) {
+            let blocked = match (surface_height, definition.water_level) {
+                (None, _) => true,
+                (Some(height), Some(water_level)) => height < origin.y + water_level,
+                (Some(_), None) => false,
+            };
+            if blocked {
                 map.blocked_paths.insert(Pos(x, z));
             }
         }
     }
 
     builder.next_x = end_x + 1;
-    if builder.next_x > WATER_NAV_MAX_CELL {
-        builder.finished = true;
-        info!(
-            "Finished water navigation mask with {} total blocked cells",
-            map.blocked_paths.len()
-        );
+    if builder.next_x > definition.navigation_max[0] {
+        info!("Finished navigation mask for '{}'", definition.name);
+        builder.map_index += 1;
+        if builder.map_index >= MAP_DEFINITIONS.len() {
+            builder.finished = true;
+            info!(
+                "Finished navigation masks with {} total blocked cells",
+                map.blocked_paths.len()
+            );
+        } else {
+            builder.next_x = MAP_DEFINITIONS[builder.map_index].navigation_min[0];
+        }
     }
 }
 
@@ -394,9 +515,17 @@ pub fn apply_rapier3d_velocity_system(
         let mut movement = Vec3::default();
         let delta_time = time.delta_secs();
 
-        if !output.map(|o| o.grounded).unwrap_or(false) {
-            movement.y += CHARACTER_GRAVITY * delta_time * controller.custom_mass.unwrap_or(1.0);
-        }
+        // Keep a downward component even while grounded. Rapier only performs
+        // `snap_to_ground` when the requested translation points downward; a
+        // zero Y request lets the capsule briefly leave a descending slope,
+        // then gravity pulls it back on the following tick, which looks like
+        // vertical vibration on the client.
+        let vertical_speed = if output.map(|o| o.grounded).unwrap_or(false) {
+            CHARACTER_GROUND_STICK_SPEED
+        } else {
+            CHARACTER_GRAVITY
+        };
+        movement.y = vertical_speed * delta_time * controller.custom_mass.unwrap_or(1.0);
 
         if (transform.translation.x != target_pos.position.x
             || transform.translation.z != target_pos.position.z)
@@ -635,6 +764,7 @@ pub fn calculate_velocity(origin: Vec3, destination: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     #[test]
     fn fixed_rapier_schedule_updates_the_authoritative_transform() {
@@ -795,6 +925,37 @@ mod tests {
     }
 
     #[test]
+    fn grounded_character_keeps_a_downward_request_for_slope_snapping() {
+        let mut world = World::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        world.insert_resource(time);
+
+        let entity = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GameVelocity(Vec3::X),
+                TargetPos { position: Vec3::X },
+                KinematicCharacterController::default(),
+                KinematicCharacterControllerOutput {
+                    grounded: true,
+                    ..default()
+                },
+            ))
+            .id();
+
+        world
+            .run_system_once(apply_rapier3d_velocity_system)
+            .unwrap();
+
+        let movement = world
+            .get::<KinematicCharacterController>(entity)
+            .and_then(|controller| controller.translation)
+            .expect("the controller should receive a movement request");
+        assert!((movement.y - CHARACTER_GROUND_STICK_SPEED / 60.0).abs() < 0.000_1);
+    }
+
+    #[test]
     fn navigation_blocks_submerged_and_outside_map_cells() {
         assert!(surface_is_submerged(Some(WATER_LEVEL - 0.01)));
         assert!(surface_is_submerged(None));
@@ -862,5 +1023,43 @@ mod tests {
                 .translation,
             None
         );
+    }
+
+    #[test]
+    fn damage_walk_delay_resumes_the_queued_destination() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Map::default())
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::from_millis(50),
+            ))
+            .add_systems(Update, tick_damage_walk_delays);
+
+        let destination = Vec3::new(2.0, 1.0, 0.0);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                DamageWalkDelay::new(Some(destination)),
+                DamageWalkDelayImmunity::default(),
+            ))
+            .id();
+
+        app.update();
+        assert!(app.world().get::<Walking>(entity).is_none());
+
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let walking = app.world().get::<Walking>(entity).unwrap();
+        assert_eq!(walking.target_translation, destination);
+        assert!(app.world().get::<DamageWalkDelay>(entity).is_none());
+        assert!(app.world().get::<DamageWalkDelayImmunity>(entity).is_some());
+
+        for _ in 0..5 {
+            app.update();
+        }
+        assert!(app.world().get::<DamageWalkDelayImmunity>(entity).is_none());
     }
 }
